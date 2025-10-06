@@ -3,6 +3,7 @@ from typing import Tuple
 from State.PlayerState import PlayerState
 from Entities.Order import Order
 
+
 class Player:
     """Jugador con resistencia, peso, reputación y velocidad afectada por clima."""
 
@@ -21,7 +22,12 @@ class Player:
         self.max_inventory_weight = max_inventory_weight
         self.state = PlayerState.NORMAL
         self.total_earnings = 0
-        self.reputation = 100  # 0-100
+        # Punto 7: reputación inicia en 70
+        self.reputation = 70  # 0-100
+
+        # --- reputación/racha/tardanza ---
+        self._on_time_streak = 0
+        self._first_late_discount_used = False  # mitad de penalización si rep >=85
 
     def can_move(self) -> bool:
         return self.stamina > 0 or self.state != PlayerState.EXHAUSTED
@@ -73,18 +79,12 @@ class Player:
         climate_multiplier: float = 1.0,
         surface_weight: float = 1.0,
         reputation_multiplier: float = 1.0,
-        stamina_extra_cost: float = 0.0,   # <— NUEVO: costo extra por clima
+        stamina_extra_cost: float = 0.0,
     ) -> bool:
-        """
-        - stamina_extra_cost: se suma al costo base por celda (fatiga extra por clima)
-        - climate_multiplier: multiplica la velocidad final (no la stamina)
-        """
         if not self.can_move():
             return False
 
         weight_penalty = self.calculate_weight_penalty()
-
-        # Coste base por paso (ajústalo a gusto)
         base_cost = 0.5
         self.consume_stamina(
             base_consumption=base_cost,
@@ -92,7 +92,6 @@ class Player:
             climate_penalty=stamina_extra_cost,
         )
 
-        # Posición y velocidad
         self.position = new_position
 
         weight_multiplier = max(0.8, 1 - 0.03 * self.inventory_weight)
@@ -111,6 +110,60 @@ class Player:
 
     def add_earnings(self, amount: int):
         self.total_earnings += amount
+
+    # ---------------- PUNTO 7: Reputación ----------------
+    def apply_reputation_change(self, delta: int) -> int:
+        """Aplica delta a reputación y clamp 0..100. Retorna el cambio efectivo."""
+        prev = self.reputation
+        self.reputation = int(max(0, min(100, self.reputation + delta)))
+        return self.reputation - prev
+
+    def get_pay_multiplier(self) -> float:
+        """+5% si reputación ≥ 90 (PDF)."""
+        return 1.05 if self.reputation >= 90 else 1.0
+
+    def register_delivery_outcome(self, delay_seconds: float, early: bool) -> int:
+        """
+        Ajusta reputación según resultado:
+        - Entrega temprana (≥20% antes): +5
+        - A tiempo: +3
+        - Tarde: ≤30s -2; 31–120s -5; >120s -10
+        - Primera tardanza con rep≥85: mitad de penalización.
+        Devuelve el delta aplicado.
+        """
+        delta = 0
+        if early:
+            delta = +5
+            self._on_time_streak += 1
+        elif delay_seconds <= 0:
+            delta = +3
+            self._on_time_streak += 1
+        else:
+            # Tarde → penalización según umbral
+            if delay_seconds <= 30:
+                penalty = -2
+            elif delay_seconds <= 120:
+                penalty = -5
+            else:
+                penalty = -10
+
+            # 1ra tardanza con rep alta → mitad de penalización
+            if self.reputation >= 85 and not self._first_late_discount_used:
+                penalty = int(penalty / 2)  # redondea hacia 0
+                self._first_late_discount_used = True
+
+            delta = penalty
+            self._on_time_streak = 0  # rompe racha
+
+        # Bonus por racha de 3 sin penalización
+        if self._on_time_streak and self._on_time_streak % 3 == 0:
+            delta += self.apply_reputation_change(+2)  # aplica el +2 primero
+            # ya sumó el +2, no duplicar: vamos a sumar el delta principal abajo
+            # nota: el +2 ya fue aplicado, no necesitamos marcar racha aquí
+
+        # Aplica delta principal
+        self.apply_reputation_change(delta)
+        return delta
 
     def __repr__(self):
         return f"Player(pos={self.position}, stamina={self.stamina:.1f}, weight={self.inventory_weight}, rep={self.reputation})"

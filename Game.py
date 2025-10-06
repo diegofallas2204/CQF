@@ -1,24 +1,26 @@
-import pygame
-import time
-from typing import List, Dict, Any, Optional, Tuple
-from Management.APIManager import APIManager
-from Management.FileManager import FileManager
-from Management.CacheManager import CacheManager
-from Management.WeatherManager import WeatherManager
-from Entities.Player import Player
-from Entities.City import City
-from Management.Inventory import Inventory
-from DataStructure.DoublyLinkedList import DoublyLinkedList
-from Management.OrderManager import OrderManager
-from Management.GameStateManager import GameStateManager
-from Management.ScoreCalculator import ScoreCalculator
-from State.GameState import GameState
-from State.PlayerState import PlayerState
-from State.OrderState import OrderState
-from datetime import datetime
-from copy import deepcopy
-import os
 import inspect
+import os
+import time
+from copy import deepcopy
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
+import pygame
+
+from DataStructure.DoublyLinkedList import DoublyLinkedList
+from Entities.City import City
+from Entities.Player import Player
+from Management.APIManager import APIManager
+from Management.CacheManager import CacheManager
+from Management.FileManager import FileManager
+from Management.GameStateManager import GameStateManager
+from Management.Inventory import Inventory
+from Management.OrderManager import OrderManager
+from Management.ScoreCalculator import ScoreCalculator
+from Management.WeatherManager import WeatherManager
+from State.GameState import GameState
+from State.OrderState import OrderState
+from State.PlayerState import PlayerState
 
 
 class Game:
@@ -68,7 +70,7 @@ class Game:
         # UI y controles
         self.selected_order_index = 0  # Para navegación en menú de pedidos
         self.inventory_sort_mode = "priority"  # priority, deadline, payout
-
+        self.hud_reserved = 160
         # Colores
         self.colors = {
             "BLACK": (0, 0, 0),
@@ -84,6 +86,12 @@ class Game:
             "DARK_GREEN": (0, 128, 0),
             "DARK_RED": (128, 0, 0),
         }
+        self.late_deliveries = 0
+        # ---- Punto 9: puntaje final y tablero ----
+        self._game_end_reason = None  # "victory" | "timeout" | "reputation"
+        self._final_score_data = None  # cache del cálculo para render
+        self._score_saved = False  # evitar guardar dos veces
+        self.player_name = "Player"  # simple; si quieres, luego implementamos input
 
     def handle_events(self):
         """Manejo extendido de eventos"""
@@ -106,7 +114,6 @@ class Game:
 
                 elif self.state in [GameState.VICTORY, GameState.GAME_OVER]:
                     self._handle_game_end_input(event.key)
-                
 
     def _handle_menu_input(self, key):
         """Manejo de input en menú"""
@@ -194,6 +201,13 @@ class Game:
             self._reset_game()
         elif key in [pygame.K_q, pygame.K_ESCAPE]:
             self.running = False
+        elif key == pygame.K_s:
+            if not self._score_saved and self._final_score_data:
+                self.save_score(
+                    self.player_name, int(self._final_score_data["final_score"])
+                )
+                self._score_saved = True
+                print("Puntaje guardado.")
 
     def _attempt_move(self, dx: int, dy: int):
         """Intenta mover al jugador y guarda estado"""
@@ -258,23 +272,47 @@ class Game:
                 self._deliver_current_order()
 
     def _deliver_current_order(self):
-        """Entrega el pedido actual"""
+        """Entrega el pedido actual con ajuste de reputación y pago."""
         current_order = self.inventory.get_current_order()
         if not current_order:
             return
 
         delivered_order = self.order_manager.deliver_order(current_order.id)
-        if delivered_order:
-            # Calcular pago (aquí se aplicaría multiplicador de reputación)
-            payout = delivered_order.payout
-            self.player.add_earnings(payout)
+        if not delivered_order:
+            return
 
-            # Remover del inventario y sincronizar peso
-            self.inventory.remove_order(delivered_order.id)
-            self.player.inventory_weight = self.inventory.current_weight
+        # Determinar puntualidad
+        # Si Order.deliver_order ya puso delivery_time = now, úsalo:
+        delivery_time = delivered_order.delivery_time
+        delay_seconds = delivered_order.calculate_delay(delivery_time)
+        early = delivered_order.is_early_delivery(delivery_time)
 
-            print(f"¡Pedido {delivered_order.id} entregado! +${payout}")
-            print(f"Ingresos totales: ${self.player.total_earnings}")
+        # Ajuste de reputación segun resultado (Punto 7)
+        rep_delta = self.player.register_delivery_outcome(
+            delay_seconds=delay_seconds,
+            early=early,
+        )
+        # Contador de tardanzas para puntaje (solo si tardó)
+        if delay_seconds > 0:
+            self.late_deliveries += 1
+
+        # Multiplicador de pago por reputación (≥90 → +5%)
+        pay_mult = self.player.get_pay_multiplier()
+        payout = int(round(delivered_order.payout * pay_mult))
+        self.player.add_earnings(payout)
+
+        # Remover del inventario y sincronizar peso
+        self.inventory.remove_order(delivered_order.id)
+        self.player.inventory_weight = self.inventory.current_weight
+
+        print(
+            f"¡Pedido {delivered_order.id} entregado! Pago ${payout} (mult x{pay_mult:.2f})"
+        )
+        if rep_delta != 0:
+            print(
+                f"Reputación ajustada: {('+' if rep_delta>0 else '')}{rep_delta} → {self.player.reputation}"
+            )
+        print(f"Ingresos totales: ${self.player.total_earnings}")
 
     def _toggle_inventory_sort(self):
         """Cambia el modo de ordenamiento del inventario y actualiza la navegación"""
@@ -396,18 +434,11 @@ class Game:
             self.inventory.remove_order(current_order.id)
             self.player.inventory_weight = self.inventory.current_weight
 
-            # Aplicar penalización: reputación y deducción de earnings (puedes ajustar valores)
-            penalty_rep = 10
-            penalty_money = 50
-            self.player.reputation = max(0, self.player.reputation - penalty_rep)
-            self.player.total_earnings = max(
-                0, self.player.total_earnings - penalty_money
-            )
+            # Penalización de reputación (PDF: -4) — sin quitar dinero directo
+            penalty_rep = -4
+            self.player.apply_reputation_change(penalty_rep)
 
-            # Opcional: NOTA: el pedido queda en estado CANCELLED en all_orders (no regresa a available)
-            print(
-                f"Pedido {current_order.id} cancelado. -{penalty_rep} reputación, -${penalty_money}."
-            )
+            print(f"Pedido {current_order.id} cancelado. {penalty_rep} reputación.")
         else:
             print("No se pudo cancelar el pedido (estado inválido).")
 
@@ -463,22 +494,30 @@ class Game:
         self.inventory = Inventory()
         self.state_manager.clear_history()
 
-        # Actualizar pedidos disponibles
+        # ---- Punto 9: reset métricas/flags
+        self.late_deliveries = 0
+        self._game_end_reason = None
+        self._final_score_data = None
+        self._score_saved = False
+        # Punto 7: reset de “primera tardanza con rep alta”
+        if hasattr(self.player, "_first_late_discount_used"):
+            self.player._first_late_discount_used = False
+
+        # Actualizar pedidos disponibles a t=0 (release_time)
         self.order_manager.update_available_orders(0.0)
 
         # Inicializar configuración de clima (API/cache/file o fallback)
         self.refresh_weather()
-        # --- DEBUG: acelera el clima para probar en 10–15 s con transición de 2 s ---
+
+        # --- DEBUG: acelerar clima para pruebas ---
         try:
-            self.weather_manager._rand_burst = lambda: 12   # cada ~12 s
+            self.weather_manager._rand_burst = lambda: 12  # cada ~12 s
             self.weather_manager._rand_transition = lambda: 2
-            # si ya se inicializó una ráfaga larga, forzamos que la actual termine pronto:
             self.weather_manager._burst_dur = 12
             self.weather_manager._t = min(self.weather_manager._t, 11.0)
         except Exception:
             pass
         # --- fin DEBUG ---
-
 
         # Debug: Verificar que hay pedidos disponibles
         available = self.order_manager.get_available_orders_by_priority()
@@ -486,7 +525,7 @@ class Game:
         for order in available:
             print(f"  - {order.id}: prioridad {order.priority}, pago ${order.payout}")
 
-        # Asegurar que el peso del inventario del jugador esté sincronizado
+        # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
 
         # Abrir directamente el menú de selección de pedidos
@@ -494,13 +533,29 @@ class Game:
         self.selected_order_index = 0
         print("Menú de pedidos abierto automáticamente")
 
+        # ↓↓↓ SOLO PARA PRUEBA DE VICTORIA ↓↓↓
+        # self.city.goal = 180
+        print(f"[DEBUG] Meta de ingresos forzada a ${self.city.goal}")
+        # ↑↑↑ BORRAR/COMENTAR PARA ENTREGA ↑↑↑
+
     def _reset_game(self):
         """Resetea el juego para nueva partida"""
         self.player = Player()
         self.inventory = Inventory()
         self.state_manager.clear_history()
+
         self.selected_order_index = 0
         self.inventory_sort_mode = "priority"
+
+        # ---- Punto 9: reset banderas/métricas
+        self._game_end_reason = None
+        self._final_score_data = None
+        self._score_saved = False
+        self.late_deliveries = 0
+
+        # Punto 7: reset de “primera tardanza con rep alta”
+        if hasattr(self.player, "_first_late_discount_used"):
+            self.player._first_late_discount_used = False
 
     def update(self, delta_time: float):
         """Actualización extendida del juego"""
@@ -509,7 +564,17 @@ class Game:
 
             # Actualizar pedidos disponibles y expirados
             self.order_manager.update_available_orders(self.current_time)
-            self.order_manager.update_expired_orders()
+            # Expiraciones: penalización reputación y limpieza de inventario
+            just_expired = self.order_manager.update_expired_orders()
+            for o in just_expired:
+                # -6 reputación (PDF)
+                self.player.apply_reputation_change(-6)
+                # si estaba en inventario → remover
+                self.inventory.remove_order(o.id)
+                self.player.inventory_weight = self.inventory.current_weight
+                print(
+                    f"Pedido {o.id} expiró. -6 reputación. Rep={self.player.reputation}"
+                )
 
             # Avanzar ráfagas y transiciones del clima
             self.weather_manager.update(delta_time)
@@ -528,21 +593,35 @@ class Game:
             self.check_game_conditions()
 
     def check_game_conditions(self):
-        """Verificación extendida de condiciones"""
         # Victoria por ingresos
         if self.player.total_earnings >= self.city.goal:
             self.state = GameState.VICTORY
+            self._game_end_reason = "victory"
+            self._compute_final_score_once()
+            return
+
+        # Derrota por reputación
+        if getattr(self.player, "reputation", 100) < 20:
+            self.state = GameState.GAME_OVER
+            self._game_end_reason = "reputation"
+            self._compute_final_score_once()
+            return
 
         # Derrota por tiempo
-        elif self.current_time >= self.game_duration:
+        if self.current_time >= self.game_duration:
             self.state = GameState.GAME_OVER
-
-        # En fases posteriores: verificar derrota por reputación < 20
+            self._game_end_reason = "timeout"
+            self._compute_final_score_once()
+            return
 
     def render(self):
         """Renderizado extendido"""
         # Fondo según clima
-        bg = self.weather_manager.get_background_color() if self.weather_manager else self.colors["BLACK"]
+        bg = (
+            self.weather_manager.get_background_color()
+            if self.weather_manager
+            else self.colors["BLACK"]
+        )
         self.screen.fill(bg)
 
         if self.state == GameState.MENU:
@@ -609,23 +688,34 @@ class Game:
         # UI extendida
         self._render_extended_ui()
 
-    def _render_map(self):
-        """Renderiza el mapa con mejor uso del espacio"""
+    def _tile_geom(self):
+        """
+        Devuelve (tile_size, offset_x, offset_y) calculados de forma consistente
+        para **todas** las funciones que dibujan el mapa, jugador y pedidos.
+        """
         if not self.city.tiles:
-            return
+            return (0, 0, 0)
 
-        # Usar más espacio vertical, dejando menos para UI
-        available_height = self.screen.get_height() - 150  # Reducido de 200 a 150
+        available_height = self.screen.get_height() - self.hud_reserved
         tile_size = min(
             self.screen.get_width() // self.city.width,
             available_height // self.city.height,
         )
 
-        # Centrar el mapa si es necesario
         map_width = self.city.width * tile_size
         map_height = self.city.height * tile_size
         offset_x = (self.screen.get_width() - map_width) // 2
-        offset_y = 10  # Pequeño margen superior
+        offset_y = 10  # margen superior constante
+
+        return (tile_size, offset_x, offset_y)
+
+    def _render_map(self):
+        if not self.city.tiles:
+            return
+
+        tile_size, offset_x, offset_y = self._tile_geom()
+        if tile_size <= 0:
+            return
 
         for y, row in enumerate(self.city.tiles):
             for x, tile_type in enumerate(row):
@@ -635,7 +725,6 @@ class Game:
                     tile_size,
                     tile_size,
                 )
-
                 if tile_type in self.city.blocked_tiles:
                     color = self.colors["GRAY"]
                 elif tile_type == "P":
@@ -647,179 +736,218 @@ class Game:
                 pygame.draw.rect(self.screen, self.colors["BLACK"], rect, 1)
 
     def _render_orders_on_map(self):
-        """Renderiza iconos de pedidos en el mapa con mejor visibilidad
-
-        Reglas aplicadas:
-        - Solo pickups de pedidos AVAILABLE muestran círculo azul 'P'.
-        - Solo el dropoff del pedido actual (inventario.current) se muestra en rojo 'D'.
-        """
         if not self.city.tiles:
             return
 
-        available_height = self.screen.get_height() - 150
-        tile_size = min(
-            self.screen.get_width() // self.city.width,
-            available_height // self.city.height,
-        )
-
-        # Calcular offset para centrar mapa
-        map_width = self.city.width * tile_size
-        offset_x = (self.screen.get_width() - map_width) // 2
-        offset_y = 10
+        tile_size, offset_x, offset_y = self._tile_geom()
+        if tile_size <= 0:
+            return
 
         icon_radius = max(6, tile_size // 4)
         font = pygame.font.Font(None, max(14, tile_size // 3))
 
-        # Mostrar pickups SOLO si release_time ya pasó
         current_game_time = self.current_time
+
+        # Pickups de pedidos AVAILABLE cuyo release_time ya pasó
         for order in self.order_manager.all_orders.values():
             if (
                 order.state == OrderState.AVAILABLE
                 and current_game_time >= order.release_time
             ):
-                pickup_x, pickup_y = order.pickup
-                center_x = offset_x + pickup_x * tile_size + tile_size // 2
-                center_y = offset_y + pickup_y * tile_size + tile_size // 2
+                px, py = order.pickup
+                cx = offset_x + px * tile_size + tile_size // 2
+                cy = offset_y + py * tile_size + tile_size // 2
 
                 pygame.draw.circle(
-                    self.screen, self.colors["BLUE"], (center_x, center_y), icon_radius
+                    self.screen, self.colors["BLUE"], (cx, cy), icon_radius
                 )
                 pygame.draw.circle(
-                    self.screen,
-                    self.colors["WHITE"],
-                    (center_x, center_y),
-                    icon_radius,
-                    2,
+                    self.screen, self.colors["WHITE"], (cx, cy), icon_radius, 2
                 )
-
                 text = font.render("P", True, self.colors["WHITE"])
-                text_rect = text.get_rect(center=(center_x, center_y))
-                self.screen.blit(text, text_rect)
+                self.screen.blit(text, text.get_rect(center=(cx, cy)))
 
-        # SEGUNDO: Mostrar solo el dropoff del pedido aceptado/recogido actual
+        # Dropoff del pedido actual
         current_order = self.inventory.get_current_order()
         if current_order and current_order.state in [
             OrderState.ACCEPTED,
             OrderState.PICKED_UP,
         ]:
-            dropoff_x, dropoff_y = current_order.dropoff
-            center_x = offset_x + dropoff_x * tile_size + tile_size // 2
-            center_y = offset_y + dropoff_y * tile_size + tile_size // 2
-
+            dx, dy = current_order.dropoff
+            cx = offset_x + dx * tile_size + tile_size // 2
+            cy = offset_y + dy * tile_size + tile_size // 2
+            pygame.draw.circle(self.screen, self.colors["RED"], (cx, cy), icon_radius)
             pygame.draw.circle(
-                self.screen, self.colors["RED"], (center_x, center_y), icon_radius
+                self.screen, self.colors["WHITE"], (cx, cy), icon_radius, 2
             )
-            pygame.draw.circle(
-                self.screen, self.colors["WHITE"], (center_x, center_y), icon_radius, 2
-            )
-
-            # Letra "D" para delivery
             text = font.render("D", True, self.colors["WHITE"])
-            text_rect = text.get_rect(center=(center_x, center_y))
-            self.screen.blit(text, text_rect)
+            self.screen.blit(text, text.get_rect(center=(cx, cy)))
 
-            # Línea conectando pickup con delivery si fue recogido
             if current_order.state == OrderState.PICKED_UP:
-                pickup_center_x = (
-                    offset_x + current_order.pickup[0] * tile_size + tile_size // 2
-                )
-                pickup_center_y = (
-                    offset_y + current_order.pickup[1] * tile_size + tile_size // 2
-                )
+                pxc = offset_x + current_order.pickup[0] * tile_size + tile_size // 2
+                pyc = offset_y + current_order.pickup[1] * tile_size + tile_size // 2
                 pygame.draw.line(
-                    self.screen,
-                    self.colors["YELLOW"],
-                    (pickup_center_x, pickup_center_y),
-                    (center_x, center_y),
-                    3,
+                    self.screen, self.colors["YELLOW"], (pxc, pyc), (cx, cy), 3
                 )
 
     def _render_player(self):
-        """Renderiza jugador con coordenadas centradas"""
         if not self.city.tiles:
             return
 
-        available_height = self.screen.get_height() - 150
-        tile_size = min(
-            self.screen.get_width() // self.city.width,
-            available_height // self.city.height,
-        )
-
-        # Calcular offset para centrar mapa
-        map_width = self.city.width * tile_size
-        offset_x = (self.screen.get_width() - map_width) // 2
-        offset_y = 10
+        tile_size, offset_x, offset_y = self._tile_geom()
+        if tile_size <= 0:
+            return
 
         x, y = self.player.position
-        center_x = offset_x + x * tile_size + tile_size // 2
-        center_y = offset_y + y * tile_size + tile_size // 2
+        cx = offset_x + x * tile_size + tile_size // 2
+        cy = offset_y + y * tile_size + tile_size // 2
 
         if self.player.state == PlayerState.EXHAUSTED:
             color = self.colors["RED"]
         elif self.player.state == PlayerState.TIRED:
             color = self.colors["ORANGE"]
         else:
-            color = self.colors["PURPLE"]  # Color Fase 2
+            color = self.colors["PURPLE"]
 
-        pygame.draw.circle(self.screen, color, (center_x, center_y), tile_size // 1.9)
-        # Borde blanco para mayor visibilidad
+        pygame.draw.circle(self.screen, color, (cx, cy), tile_size // 1.9)
         pygame.draw.circle(
-            self.screen, self.colors["WHITE"], (center_x, center_y), tile_size // 4, 2
+            self.screen, self.colors["WHITE"], (cx, cy), tile_size // 4, 2
         )
+
+    # ---------- Helpers UI ----------
+    def _draw_text(self, text, x, y, color, size=22, *, center=False, shadow=True):
+        """Dibuja texto con sombra sutil para mejorar contraste."""
+        font = pygame.font.Font(None, size)
+        surf = font.render(text, True, color)
+        rect = surf.get_rect()
+        if center:
+            rect.center = (x, y)
+        else:
+            rect.topleft = (x, y)
+
+        if shadow:
+            shadow_surf = font.render(text, True, (0, 0, 0))
+            shadow_rect = shadow_surf.get_rect()
+            shadow_rect.topleft = (rect.left + 1, rect.top + 1)
+            self.screen.blit(shadow_surf, shadow_rect)
+
+        self.screen.blit(surf, rect)
+        return rect
+
+    def _draw_panel(self, x, y, w, h, *, alpha=180, radius=10, color=(20, 40, 60)):
+        """Dibuja un panel translúcido con borde redondeado."""
+        panel = pygame.Surface((w, h), pygame.SRCALPHA)
+        r, g, b = color
+        panel.fill((0, 0, 0, 0))
+        pygame.draw.rect(
+            panel, (r, g, b, alpha), panel.get_rect(), border_radius=radius
+        )
+        self.screen.blit(panel, (x, y))
 
     def _render_extended_ui(self):
-        """UI extendida optimizada para ventana más pequeña"""
-        font = pygame.font.Font(None, 20)  # Fuente más pequeña
-        available_height = self.screen.get_height() - 150
-        ui_y_start = available_height + 20  # Justo debajo del mapa
+        """HUD con panel translúcido, columnas y tipografía más legible."""
+        # --- Layout base ---
+        panel_margin_x = 8
+        panel_margin_y = 6
 
-        # Información básica en columnas para aprovechar espacio horizontal
-        col1_x = 10
-        col2_x = 200
-        col3_x = 400
-        col4_x = 600
+        available_height = self.screen.get_height() - self.hud_reserved
+        ui_y_start = available_height + 8
 
-        # Columna 1: Estado del jugador
-        stamina_text = f"Resistencia: {self.player.stamina:.0f}/100"
-        text_surface = font.render(stamina_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col1_x, ui_y_start))
+        panel_x = 6
+        panel_y = ui_y_start - 6
+        panel_w = self.screen.get_width() - 12
+        panel_h = 140  # altura del panel HUD
 
-        # Barra de resistencia más pequeña
-        bar_width = 100
-        bar_height = 8
-        bar_x = col1_x
-        bar_y = ui_y_start + 15
-
-        pygame.draw.rect(
-            self.screen, self.colors["GRAY"], (bar_x, bar_y, bar_width, bar_height)
+        # Panel translúcido (contraste con el fondo/clima)
+        self._draw_panel(
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            alpha=170,
+            radius=12,
+            color=(25, 70, 100),
         )
 
-        stamina_ratio = self.player.stamina / 100.0
+        # Columnas (4)
+        col_w = panel_w // 4
+        col_x = [panel_x + panel_margin_x + col_w * i for i in range(4)]
+        row_y1 = panel_y + panel_margin_y + 6
+        row_y2 = row_y1 + 22
+        row_y3 = row_y2 + 22
+        row_y4 = row_y3 + 22  # fila extra
+
+        # ------ Columna 1: Player ------
+        self._draw_text(
+            f"Resistencia: {self.player.stamina:.0f}/100",
+            col_x[0],
+            row_y1,
+            self.colors["WHITE"],
+            size=22,
+        )
+        # Barra de resistencia
+        bar_w, bar_h = 140, 10
+        bar_x, bar_y = col_x[0], row_y1 + 18
+        pygame.draw.rect(
+            self.screen,
+            self.colors["GRAY"],
+            (bar_x, bar_y, bar_w, bar_h),
+            border_radius=4,
+        )
+        stamina_ratio = max(0.0, min(1.0, self.player.stamina / 100.0))
         stamina_color = (
             self.colors["GREEN"]
             if stamina_ratio > 0.5
             else self.colors["YELLOW"] if stamina_ratio > 0.2 else self.colors["RED"]
         )
-
         pygame.draw.rect(
             self.screen,
             stamina_color,
-            (bar_x, bar_y, bar_width * stamina_ratio, bar_height),
+            (bar_x, bar_y, int(bar_w * stamina_ratio), bar_h),
+            border_radius=4,
         )
 
-        # Columna 2: Inventario
-        inventory_text = f"Inventario: {self.inventory.get_count()}"
-        text_surface = font.render(inventory_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col2_x, ui_y_start))
+        # Reputación y multiplicador (bajadas 10 px para no chocar con la barra)
+        self._draw_text(
+            f"Reputación: {self.player.reputation}/100",
+            col_x[0],
+            row_y2 + 10,
+            self.colors["WHITE"],
+            size=20,
+        )
+        self._draw_text(
+            f"Pago x{self.player.get_pay_multiplier():.2f}",
+            col_x[0],
+            row_y3 + 10,
+            self.colors["YELLOW"],
+            size=20,
+        )
 
-        weight_text = f"Peso: {self.inventory.current_weight:.1f}kg"
-        text_surface = font.render(weight_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col2_x, ui_y_start + 15))
+        # ------ Columna 2: Inventario ------
+        self._draw_text(
+            f"Inventario: {self.inventory.get_count()}",
+            col_x[1],
+            row_y1,
+            self.colors["WHITE"],
+            size=22,
+        )
+        self._draw_text(
+            f"Peso: {self.inventory.current_weight:.1f}kg",
+            col_x[1],
+            row_y2,
+            self.colors["WHITE"],
+            size=20,
+        )
 
-        # Columna 3: Pedido actual
+        # Sistema de deshacer / stats
+        undo_count = self.state_manager.get_undo_count()
+        self._draw_text(
+            f"Deshacer: {undo_count}", col_x[1], row_y3, self.colors["CYAN"], size=20
+        )
+
+        # ------ Columna 3: Pedido actual / recuperación ------
         current_order = self.inventory.get_current_order()
         if current_order:
-            current_text = f"Actual: {current_order.id}"
             color = (
                 self.colors["YELLOW"]
                 if current_order.state == OrderState.ACCEPTED
@@ -829,63 +957,132 @@ class Game:
                     else self.colors["WHITE"]
                 )
             )
-            text_surface = font.render(current_text, True, color)
-            self.screen.blit(text_surface, (col3_x, ui_y_start))
+            self._draw_text(
+                f"Actual: {current_order.id}", col_x[2], row_y1, color, size=22
+            )
+            self._draw_text(
+                f"${current_order.payout}", col_x[2], row_y2, color, size=20
+            )
 
-            payout_text = f"${current_order.payout}"
-            text_surface = font.render(payout_text, True, color)
-            self.screen.blit(text_surface, (col3_x, ui_y_start + 15))
+        # Recuperación si está quieto
+        current_time = time.time()
+        if current_time - self.last_movement_time > self.movement_cooldown:
+            self._draw_text(
+                "Recuperando +2/s", col_x[2], row_y3, self.colors["PURPLE"], size=20
+            )
 
-        # Columna 4: Tiempo e ingresos
+        # ------ Columna 4: Tiempo / ingresos / clima ------
         time_left = max(0, self.game_duration - self.current_time)
         minutes = int(time_left // 60)
         seconds = int(time_left % 60)
-        time_text = f"Tiempo: {minutes:02d}:{seconds:02d}"
-        text_surface = font.render(time_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col4_x, ui_y_start))
-
-        earnings_text = f"${self.player.total_earnings}/${self.city.goal}"
-        text_surface = font.render(earnings_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col4_x, ui_y_start + 15))
-        # Mostrar clima actual en la HUD (columna 4)
-        cond, inten, in_trans = self.weather_manager.get_ui_tuple()
-        wx_text = f"Clima: {cond} ({inten:.2f})" + (" *" if in_trans else "")
-        text_surface = font.render(wx_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col4_x, ui_y_start + 30))
-
-
-        # Segunda fila: Estadísticas y controles
-        row2_y = ui_y_start + 35
-
-        # Estadísticas de pedidos
-        stats = self.order_manager.get_statistics()
-        stats_text = (
-            f"Disponibles:{stats['available']} Completados:{stats['completed']}"
+        self._draw_text(
+            f"Tiempo: {minutes:02d}:{seconds:02d}",
+            col_x[3],
+            row_y1,
+            self.colors["WHITE"],
+            size=22,
         )
-        text_surface = font.render(stats_text, True, self.colors["WHITE"])
-        self.screen.blit(text_surface, (col1_x, row2_y))
+        self._draw_text(
+            f"${self.player.total_earnings}/${self.city.goal}",
+            col_x[3],
+            row_y2,
+            self.colors["WHITE"],
+            size=20,
+        )
 
-        # Sistema de deshacer
-        undo_count = self.state_manager.get_undo_count()
-        undo_text = f"Deshacer: {undo_count}"
-        text_surface = font.render(undo_text, True, self.colors["BLUE"])
-        self.screen.blit(text_surface, (col2_x, row2_y))
+        cond, inten, in_trans = self.weather_manager.get_ui_tuple()
+        wx = f"Clima: {cond} ({inten:.2f})" + (" *" if in_trans else "")
+        self._draw_text(wx, col_x[3], row_y3, self.colors["WHITE"], size=20)
 
-        # Recuperación
-        current_time = time.time()
-        time_since_movement = current_time - self.last_movement_time
+        # ---------- Punto 9: Preview de score en vivo (columna derecha, bajo clima) ----------
+        stats = self.order_manager.get_statistics()
+        rep_mult = (
+            self.player.get_pay_multiplier()
+            if hasattr(self.player, "get_pay_multiplier")
+            else 1.0
+        )
+        base_now = int(self.player.total_earnings * rep_mult)
+        time_bonus_now = int(
+            self.score_calculator.calculate_time_bonus(
+                self.current_time, self.game_duration
+            )
+        )
+        penalties_now = (
+            stats.get("cancelled", 0) * 50
+            + stats.get("expired", 0) * 100
+            + self.late_deliveries * 25
+        )
+        final_now = max(0, base_now + time_bonus_now - penalties_now)
 
-        if time_since_movement > self.movement_cooldown:
-            recovery_text = "Recuperando +2/s"
-            text_surface = font.render(recovery_text, True, self.colors["PURPLE"])
-            self.screen.blit(text_surface, (col3_x, row2_y))
+        preview_x = col_x[3]
+        preview_y = row_y4  # usa la fila extra para evitar choques
+        self._draw_text(
+            f"Score (ahora): {final_now}",
+            preview_x,
+            preview_y,
+            self.colors["YELLOW"],
+            size=20,
+        )
+        self._draw_text(
+            f"base={base_now}  bonus={time_bonus_now}  -{penalties_now}",
+            preview_x,
+            preview_y + 18,
+            self.colors["WHITE"],
+            size=16,
+        )
 
-        # Tercera fila: Controles compactos
-        row3_y = ui_y_start + 50
-        controls_font = pygame.font.Font(None, 20)
-        controls_text = "ESPACIO = Pedidos // I = Ordenar // U = Deshacer // N/P = Navegar // C = Cancelar // ESC = Pausa // E = Aceptar/Recoger"
-        text_surface = controls_font.render(controls_text, True, self.colors["BLACK"])
-        self.screen.blit(text_surface, (col1_x, row3_y))
+        # ------ Fila extra izquierda: stats compactos ------
+        self._draw_text(
+            f"Disponibles:{stats['available']}  Completados:{stats['completed']}",
+            panel_x + 12,
+            row_y4,
+            self.colors["WHITE"],
+            size=18,
+        )
+
+        # ------ Controles (dos líneas si hace falta) ------
+        controls = "ESPACIO = Pedidos  |  I = Ordenar  |  U = Deshacer  |  N/P = Navegar  |  C = Cancelar  |  ESC = Pausa  |  E = Aceptar/Recoger"
+        max_width = panel_w - 24
+        font = pygame.font.Font(None, 18)
+        words = controls.split()
+        lines, line = [], ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if font.size(test)[0] <= max_width:
+                line = test
+            else:
+                lines.append(line)
+                line = w
+        if line:
+            lines.append(line)
+
+        controls_y = panel_y + panel_h - 18
+        if len(lines) == 1:
+            self._draw_text(
+                lines[0],
+                panel_x + 12,
+                controls_y,
+                self.colors["BLACK"],
+                size=18,
+                shadow=False,
+            )
+        else:
+            self._draw_text(
+                lines[0],
+                panel_x + 12,
+                controls_y - 16,
+                self.colors["BLACK"],
+                size=18,
+                shadow=False,
+            )
+            self._draw_text(
+                lines[1],
+                panel_x + 12,
+                controls_y,
+                self.colors["BLACK"],
+                size=18,
+                shadow=False,
+            )
 
     def _render_order_selection(self):
         """Renderiza menú de selección de pedidos"""
@@ -1015,64 +1212,117 @@ class Game:
         self.screen.blit(continue_text, continue_rect)
 
     def _render_game_end(self):
-        """Renderiza pantalla de fin de juego con puntuación"""
+        # Asegura cálculo cacheado
+        self._compute_final_score_once()
+
         self.screen.fill(self.colors["BLACK"])
+        font_title = pygame.font.Font(None, 48)
+        font = pygame.font.Font(None, 28)
 
-        font = pygame.font.Font(None, 48)
-        if self.state == GameState.VICTORY:
-            end_text = font.render("¡VICTORIA!", True, self.colors["GREEN"])
-        else:
-            end_text = font.render("DERROTA", True, self.colors["RED"])
+        # Título (Victoria/Derrota)
+        is_victory = self._game_end_reason == "victory"
+        title = "¡VICTORIA!" if is_victory else "DERROTA"
+        title_color = self.colors["GREEN"] if is_victory else self.colors["RED"]
+        self.screen.blit(
+            font_title.render(title, True, title_color),
+            (self.screen.get_width() // 2 - 100, 80),
+        )
 
-        end_rect = end_text.get_rect(center=(self.screen.get_width() // 2, 100))
-        self.screen.blit(end_text, end_rect)
+        # Motivo legible
+        reason_map = {
+            "victory": "Meta alcanzada",
+            "timeout": "Se acabó el tiempo",
+            "reputation": "Reputación muy baja",
+        }
+        motivo = reason_map.get(self._game_end_reason, "-")
 
-        # Calcular y mostrar puntuación final
+        # Datos de score (defensivo si no hubiera sido calculado)
+        sd = self._final_score_data or {}
+        br = sd.get("breakdown", {})
         stats = self.order_manager.get_statistics()
-        score_data = self.score_calculator.calculate_final_score(
-            total_earnings=self.player.total_earnings,
-            reputation_multiplier=1.0,  # Será implementado en Fase 4
-            completion_time=self.current_time,
-            total_game_time=self.game_duration,
-            cancelled_orders=stats.get("cancelled", 0),
-            expired_orders=stats.get("expired", 0),
-            late_deliveries=0,  # Será implementado en Fase 4
+
+        base_score = int(sd.get("base_score", 0))
+        time_bonus = int(sd.get("time_bonus", 0))
+        penalties = int(sd.get("penalties", 0))
+        final_score = int(sd.get("final_score", 0))
+        rep_mult = float(br.get("reputation_multiplier", 1.0))
+        earnings = int(br.get("earnings", 0))
+
+        y = 160
+        # Motivo
+        self.screen.blit(
+            font.render(f"Motivo: {motivo}", True, self.colors["WHITE"]), (60, y)
         )
-
-        font = pygame.font.Font(None, 24)
-        y_offset = 180
-
-        score_info = [
-            f"Ingresos totales: ${score_data['breakdown']['earnings']}",
-            f"Puntuación base: {score_data['base_score']:.0f}",
-            f"Bonus tiempo: {score_data['time_bonus']:.0f}",
-            f"Penalizaciones: -{score_data['penalties']:.0f}",
-            f"PUNTUACIÓN FINAL: {score_data['final_score']:.0f}",
-            "",
-            f"Pedidos completados: {stats['completed']}",
-            f"Pedidos cancelados: {stats.get('cancelled', 0)}",
-            f"Pedidos expirados: {stats.get('expired', 0)}",
-        ]
-
-        for i, info in enumerate(score_info):
-            if info == "":
-                continue
-
-            color = self.colors["YELLOW"] if "FINAL" in info else self.colors["WHITE"]
-            text_surface = font.render(info, True, color)
-            text_rect = text_surface.get_rect(
-                center=(self.screen.get_width() // 2, y_offset + i * 25)
-            )
-            self.screen.blit(text_surface, text_rect)
-
-        # Controles
-        font = pygame.font.Font(None, 20)
-        controls_text = "ESPACIO - Volver al menú | Q/ESC - Salir"
-        text_surface = font.render(controls_text, True, self.colors["GRAY"])
-        controls_rect = text_surface.get_rect(
-            center=(self.screen.get_width() // 2, self.screen.get_height() - 50)
+        y += 30
+        # Ingresos y multiplicador
+        self.screen.blit(
+            font.render(f"Ingresos: ${earnings}", True, self.colors["WHITE"]), (60, y)
         )
-        self.screen.blit(text_surface, controls_rect)
+        y += 30
+        self.screen.blit(
+            font.render(
+                f"Multiplicador rep: x{rep_mult:.2f}", True, self.colors["WHITE"]
+            ),
+            (60, y),
+        )
+        y += 30
+        # Desglose con colores útiles
+        self.screen.blit(
+            font.render(f"Puntuación base: {base_score}", True, self.colors["WHITE"]),
+            (60, y),
+        )
+        y += 30
+        self.screen.blit(
+            font.render(f"Bonus tiempo: {time_bonus}", True, self.colors["GREEN"]),
+            (60, y),
+        )
+        y += 30
+        self.screen.blit(
+            font.render(f"Penalizaciones: -{penalties}", True, self.colors["RED"]),
+            (60, y),
+        )
+        y += 30
+
+        # Puntaje final destacado
+        final_color = self.colors["YELLOW"] if final_score > 0 else self.colors["GRAY"]
+        self.screen.blit(
+            font.render(f"PUNTUACIÓN FINAL: {final_score}", True, final_color), (60, y)
+        )
+        y += 36
+
+        # Resumen de pedidos
+        comp = stats.get("completed", 0)
+        canc = stats.get("cancelled", 0)
+        expi = stats.get("expired", 0)
+        tard = getattr(self, "late_deliveries", 0)
+        self.screen.blit(
+            font.render(
+                f"Completados: {comp}  Cancelados: {canc}  Expirados: {expi}  Tardanzas: {tard}",
+                True,
+                self.colors["WHITE"],
+            ),
+            (60, y),
+        )
+        y += 36
+
+        # Instrucciones y estado de guardado
+        self.screen.blit(
+            font.render(
+                "ESPACIO: Menú  |  Q/ESC: Salir  |  S: Guardar puntaje",
+                True,
+                self.colors["WHITE"],
+            ),
+            (60, y),
+        )
+        y += 30
+
+        guardado_text = (
+            "(ya guardado)" if self._score_saved else "(presiona S para guardar)"
+        )
+        self.screen.blit(font.render(guardado_text, True, self.colors["GRAY"]), (60, y))
+        y += 24
+
+        pygame.display.flip()
 
     def load_city_data(self, city_data: Dict[str, Any]) -> bool:
         """Carga datos de la ciudad"""
@@ -1094,12 +1344,12 @@ class Game:
         pygame.quit()
 
     def _fetch_resource(
-    self,
-    api_call,                 # función que retorna el payload o None
-    cache_key: str,           # "city" | "orders" | "weather"
-    file_name: str,           # "city.json" | "orders.json" | "weather.json"
-    expect_list: bool = False,# True si esperas lista (orders)
-    cache_ttl: int = 60*5     # edad máxima del cache, por si la red falla
+        self,
+        api_call,  # función que retorna el payload o None
+        cache_key: str,  # "city" | "orders" | "weather"
+        file_name: str,  # "city.json" | "orders.json" | "weather.json"
+        expect_list: bool = False,  # True si esperas lista (orders)
+        cache_ttl: int = 60 * 5,  # edad máxima del cache, por si la red falla
     ) -> Optional[Tuple[Optional[Any], str]]:
         """
         Intenta SIEMPRE API primero. Si hay respuesta:
@@ -1147,14 +1397,13 @@ class Game:
 
         return None, "none"
 
-
     def refresh_city(self) -> bool:
         city_data, src = self._fetch_resource(
             api_call=self.api_manager.get_city,
             cache_key="city",
             file_name="city.json",
             expect_list=False,
-            cache_ttl=60*5
+            cache_ttl=60 * 5,
         )
         if not city_data:
             print("No se pudo cargar datos de ciudad (API/cache/file).")
@@ -1165,14 +1414,13 @@ class Game:
             return False
         return True
 
-
     def refresh_orders(self) -> bool:
         orders_data, src = self._fetch_resource(
             api_call=self.api_manager.get_orders,
             cache_key="orders",
             file_name="orders.json",
             expect_list=True,
-            cache_ttl=60*5
+            cache_ttl=60 * 5,
         )
         if not orders_data:
             print("No se pudo cargar datos de pedidos (API/cache/file).")
@@ -1186,7 +1434,6 @@ class Game:
         self.order_manager.update_available_orders(0.0)
         return True
 
-
     def load_data_phase3(self):
         """Carga datos con política API-first (actualiza memoria + cache + archivo)."""
         if not self.refresh_city():
@@ -1196,56 +1443,78 @@ class Game:
         return True
 
     def save_game(self, filename="savegame.dat"):
-            """Guarda el estado actual de la partida"""
-            game_state = {
-                "player": deepcopy(self.player.__dict__),
-                "inventory": [order.id for order in self.inventory.orders.to_list()],
-                "orders": {
-                    oid: order.__dict__
-                    for oid, order in self.order_manager.all_orders.items()
-                },
-                "current_time": self.current_time,
-            }
-            self.file_manager.save_game(game_state, filename)
-            print(f"Partida guardada en {filename}")
+        """Guarda el estado actual de la partida"""
+        game_state = {
+            "player": deepcopy(self.player.__dict__),
+            "inventory": [order.id for order in self.inventory.orders.to_list()],
+            "orders": {
+                oid: order.__dict__
+                for oid, order in self.order_manager.all_orders.items()
+            },
+            "current_time": self.current_time,
+        }
+        self.file_manager.save_game(game_state, filename)
+        print(f"Partida guardada en {filename}")
 
     def load_game(self, filename="savegame.dat"):
-            """Carga una partida guardada"""
-            game_state = self.file_manager.load_game(filename)
-            if not game_state:
-                print("No se pudo cargar la partida.")
-                return False
-            # Restaurar player
-            for k, v in game_state["player"].items():
-                setattr(self.player, k, v)
-            # Restaurar pedidos
-            for oid, odata in game_state["orders"].items():
-                if oid in self.order_manager.all_orders:
-                    for k, v in odata.items():
-                        setattr(self.order_manager.all_orders[oid], k, v)
-            # Restaurar inventario
-            self.inventory.orders = DoublyLinkedList()
-            self.inventory.orders_by_id.clear()
-            self.inventory.current_weight = 0.0
-            for oid in game_state["inventory"]:
-                order = self.order_manager.all_orders.get(oid)
-                if order:
-                    self.inventory.add_order(order)
-            self.current_time = game_state["current_time"]
-            print(f"Partida cargada desde {filename}")
-            return True
+        """Carga una partida guardada"""
+        game_state = self.file_manager.load_game(filename)
+        if not game_state:
+            print("No se pudo cargar la partida.")
+            return False
+        # Restaurar player
+        for k, v in game_state["player"].items():
+            setattr(self.player, k, v)
+        # Restaurar pedidos
+        for oid, odata in game_state["orders"].items():
+            if oid in self.order_manager.all_orders:
+                for k, v in odata.items():
+                    setattr(self.order_manager.all_orders[oid], k, v)
+        # Restaurar inventario
+        self.inventory.orders = DoublyLinkedList()
+        self.inventory.orders_by_id.clear()
+        self.inventory.current_weight = 0.0
+        for oid in game_state["inventory"]:
+            order = self.order_manager.all_orders.get(oid)
+            if order:
+                self.inventory.add_order(order)
+        self.current_time = game_state["current_time"]
+        print(f"Partida cargada desde {filename}")
+        return True
 
     def save_score(self, player_name: str, score: int):
-            scores = self.file_manager.load_scores()
-            scores.append({"name": player_name, "score": score})
-            self.file_manager.save_scores(scores)
-            print("Puntaje guardado.")
+        scores = self.file_manager.load_scores()
+        scores.append({"name": player_name, "score": score})
+        self.file_manager.save_scores(scores)
+        print("Puntaje guardado.")
 
     def show_scores(self):
-            scores = self.file_manager.load_scores()
-            print("Tabla de puntajes:")
-            for idx, entry in enumerate(scores, 1):
-                print(f"{idx}. {entry['name']}: {entry['score']}")
+        scores = self.file_manager.load_scores()
+        print("Tabla de puntajes:")
+        for idx, entry in enumerate(scores, 1):
+            print(f"{idx}. {entry['name']}: {entry['score']}")
+
+    def _compute_final_score_once(self):
+        """Calcula y cachea el puntaje final si aún no está calculado."""
+        if self._final_score_data is not None:
+            return
+        stats = self.order_manager.get_statistics()
+        rep_mult = (
+            self.player.get_pay_multiplier()
+            if hasattr(self.player, "get_pay_multiplier")
+            else 1.0
+        )
+        self._final_score_data = self.score_calculator.calculate_final_score(
+            total_earnings=self.player.total_earnings,
+            reputation_multiplier=rep_mult,
+            completion_time=self.current_time,
+            total_game_time=self.game_duration,
+            cancelled_orders=stats.get("cancelled", 0),
+            expired_orders=stats.get("expired", 0),
+            late_deliveries=self.late_deliveries,
+        )
+        # aún no se ha guardado en tabla
+        self._score_saved = False
 
     def refresh_weather(self) -> bool:
         # intenta API -> cache -> archivo local
@@ -1254,7 +1523,7 @@ class Game:
             cache_key="weather",
             file_name="weather.json",
             expect_list=False,
-            cache_ttl=60*5,
+            cache_ttl=60 * 5,
         )
 
         if not weather_cfg:
@@ -1264,20 +1533,49 @@ class Game:
                 "data": {
                     "initial": {"condition": "clear", "intensity": 0.1},
                     "conditions": [
-                        "clear","clouds","rain_light","rain","storm","fog","wind","heat","cold"
+                        "clear",
+                        "clouds",
+                        "rain_light",
+                        "rain",
+                        "storm",
+                        "fog",
+                        "wind",
+                        "heat",
+                        "cold",
                     ],
                     "transition": {
-                        "clear":  {"clear":0.2,"clouds":0.2,"wind":0.2,"heat":0.2,"cold":0.2},
-                        "clouds": {"clear":0.2,"clouds":0.2,"rain_light":0.2,"wind":0.2,"fog":0.2},
-                        "rain_light":{"clouds":0.333,"rain_light":0.333,"rain":0.333},
-                        "rain":   {"rain_light":0.25,"rain":0.25,"storm":0.25,"clouds":0.25},
-                        "storm":  {"rain":0.5,"clouds":0.5},
-                        "fog":    {"clouds":0.333,"fog":0.333,"clear":0.333},
-                        "wind":   {"wind":0.333,"clouds":0.333,"clear":0.333},
-                        "heat":   {"heat":0.333,"clear":0.333,"clouds":0.333},
-                        "cold":   {"cold":0.333,"clear":0.333,"clouds":0.333},
+                        "clear": {
+                            "clear": 0.2,
+                            "clouds": 0.2,
+                            "wind": 0.2,
+                            "heat": 0.2,
+                            "cold": 0.2,
+                        },
+                        "clouds": {
+                            "clear": 0.2,
+                            "clouds": 0.2,
+                            "rain_light": 0.2,
+                            "wind": 0.2,
+                            "fog": 0.2,
+                        },
+                        "rain_light": {
+                            "clouds": 0.333,
+                            "rain_light": 0.333,
+                            "rain": 0.333,
+                        },
+                        "rain": {
+                            "rain_light": 0.25,
+                            "rain": 0.25,
+                            "storm": 0.25,
+                            "clouds": 0.25,
+                        },
+                        "storm": {"rain": 0.5, "clouds": 0.5},
+                        "fog": {"clouds": 0.333, "fog": 0.333, "clear": 0.333},
+                        "wind": {"wind": 0.333, "clouds": 0.333, "clear": 0.333},
+                        "heat": {"heat": 0.333, "clear": 0.333, "clouds": 0.333},
+                        "cold": {"cold": 0.333, "clear": 0.333, "clouds": 0.333},
                     },
-                }
+                },
             }
             src = "default"  # <<< marca que usamos el fallback del código
 
@@ -1285,7 +1583,6 @@ class Game:
         self.weather_manager.init_from_api_config(weather_cfg)
         print(f"Clima cargado desde {src}.")
         return True
-
 
     # def refresh_weather(self) -> bool:
     #     # intenta API -> cache -> archivo local

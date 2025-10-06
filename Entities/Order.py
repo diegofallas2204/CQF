@@ -1,6 +1,8 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 from State.OrderState import OrderState
+
+
 class Order:
     """Clase Order extendida de la Fase 1 (mismo código)"""
 
@@ -19,7 +21,10 @@ class Order:
         self.pickup = pickup
         self.dropoff = dropoff
         self.payout = payout
-        self.deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        self.deadline = dt
         self.weight = weight
         self.priority = priority
         self.release_time = release_time
@@ -31,12 +36,21 @@ class Order:
         return current_time >= self.release_time and self.state == OrderState.AVAILABLE
 
     def is_expired(self, current_time: datetime) -> bool:
+        # Vuelve aware el current_time si viene naive
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(
+                tzinfo=self.deadline.tzinfo or timezone.utc
+            )
         return current_time > self.deadline and self.state not in [
             OrderState.DELIVERED,
             OrderState.CANCELLED,
         ]
 
     def calculate_delay(self, delivery_time: datetime) -> float:
+        if delivery_time.tzinfo is None:
+            delivery_time = delivery_time.replace(
+                tzinfo=self.deadline.tzinfo or timezone.utc
+            )
         return (delivery_time - self.deadline).total_seconds()
 
     def is_early_delivery(self, delivery_time: datetime) -> bool:

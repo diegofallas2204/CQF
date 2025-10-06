@@ -1,10 +1,12 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+
 from DataStructure.PriorityQueue import PriorityQueue
 from DataStructure.SortingAlgorithms import SortingAlgorithms
 from Entities.Order import Order
 from State.OrderState import OrderState
+
 
 class OrderManager:
     """
@@ -19,24 +21,36 @@ class OrderManager:
         self.completed_orders: List[Order] = []
 
     def load_orders(self, orders_data: List[Dict[str, Any]]):
-        """Carga pedidos desde datos JSON"""
+        """Carga pedidos desde datos JSON (rebase de deadlines si vienen en el pasado)."""
         self.all_orders.clear()
         self.available_orders = PriorityQueue()
         self.expired_orders.clear()
         self.completed_orders.clear()
 
-        for order_data in orders_data:
+        now_aware = datetime.now(timezone.utc)
 
+        # Para conservar el escalonado entre pedidos, usamos un offset inicial base
+        # y sumamos 30s por índice (ajústalo si quieres que se separen más).
+        base_offset = timedelta(minutes=10)
+        step = timedelta(seconds=30)
+
+        for i, od in enumerate(orders_data):
             order = Order(
-                id=order_data["id"],
-                pickup=tuple(order_data["pickup"]),
-                dropoff=tuple(order_data["dropoff"]),
-                payout=order_data["payout"],
-                deadline=order_data["deadline"],
-                weight=order_data["weight"],
-                priority=order_data.get("priority", 0),
-                release_time=order_data.get("release_time", 0),
+                id=od["id"],
+                pickup=tuple(od["pickup"]),
+                dropoff=tuple(od["dropoff"]),
+                payout=od["payout"],
+                deadline=od["deadline"],
+                weight=od["weight"],
+                priority=od.get("priority", 0),
+                release_time=od.get("release_time", 0),
             )
+
+            # Si el deadline está en el pasado, rebasamos al futuro.
+            # Esto solo afecta la instancia en memoria (no se escribe al archivo).
+            if order.deadline <= now_aware:
+                order.deadline = now_aware + base_offset + step * i
+
             self.all_orders[order.id] = order
 
     def update_available_orders(self, current_game_time: float):
@@ -117,28 +131,24 @@ class OrderManager:
         return None
 
     def pickup_order(self, order_id: str) -> bool:
-        """Marca pedido como recogido"""
         if order_id in self.all_orders:
-            order = self.all_orders[order_id]
-            if order.state == OrderState.ACCEPTED:
-                order.state = OrderState.PICKED_UP
-                order.pickup_time = datetime.now()
+            o = self.all_orders[order_id]
+            if o.state == OrderState.ACCEPTED:
+                tz = o.deadline.tzinfo or timezone.utc
+                o.state = OrderState.PICKED_UP
+                o.pickup_time = datetime.now(tz)
                 return True
         return False
 
     def deliver_order(self, order_id: str) -> Optional[Order]:
-        """Marca pedido como entregado"""
         if order_id in self.all_orders:
-            order = self.all_orders[order_id]
-            if (
-                order.state == OrderState.PICKED_UP
-                or order.state == OrderState.ACCEPTED
-            ):
-                # Aceptamos entregarlo si está aceptado o recogido
-                order.state = OrderState.DELIVERED
-                order.delivery_time = datetime.now()
-                self.completed_orders.append(order)
-                return order
+            o = self.all_orders[order_id]
+            if o.state in [OrderState.PICKED_UP, OrderState.ACCEPTED]:
+                tz = o.deadline.tzinfo or timezone.utc
+                o.state = OrderState.DELIVERED
+                o.delivery_time = datetime.now(tz)
+                self.completed_orders.append(o)
+                return o
         return None
 
     def cancel_order(self, order_id: str) -> bool:
@@ -150,39 +160,63 @@ class OrderManager:
                 return True
         return False
 
-    def update_expired_orders(self):
-        """Actualiza pedidos expirados - DESHABILITADO para testing"""
-        # COMENTADO temporalmente para evitar que los pedidos se marquen como expirados
-        # durante el desarrollo y testing
-        pass
-
-        # TODO: Implementar correctamente cuando se tengan fechas deadline realistas
-        # current_time = datetime.now()
-        #
-        # for order in self.all_orders.values():
-        #     if (order.is_expired(current_time) and
-        #         order.state not in [OrderState.DELIVERED, OrderState.CANCELLED, OrderState.EXPIRED]):
-        #
-        #         order.state = OrderState.EXPIRED
-        #         self.expired_orders.append(order)
+    def update_expired_orders(self) -> list[Order]:
+        just_expired = []
+        for o in self.all_orders.values():
+            tz = o.deadline.tzinfo or timezone.utc
+            now_aware = datetime.now(tz)
+            if o.is_expired(now_aware) and o.state not in [
+                OrderState.DELIVERED,
+                OrderState.CANCELLED,
+                OrderState.EXPIRED,
+            ]:
+                o.state = OrderState.EXPIRED
+                self.expired_orders.append(o)
+                just_expired.append(o)
+        return just_expired
 
     def get_order_by_id(self, order_id: str) -> Optional[Order]:
         """Obtiene pedido por ID"""
         return self.all_orders.get(order_id)
 
-    def get_statistics(self) -> Dict[str, int]:
-        """Retorna estadísticas de pedidos"""
-        stats = {
-            "total": len(self.all_orders),
-            "available": self.available_orders.size(),
-            "completed": len(self.completed_orders),
-            "expired": len(self.expired_orders),
+    def get_statistics(self) -> dict:
+        """
+        Retorna estadísticas agregadas de pedidos.
+        Las claves incluyen: total, available, completed, expired, cancelled,
+        accepted, picked_up, delivered (además de las listas internas si quieres).
+        """
+        # Conteos por estado
+        counts = {
+            "available": 0,
+            "accepted": 0,
+            "picked_up": 0,
+            "delivered": 0,
+            "expired": 0,
+            "cancelled": 0,
         }
 
-        # Contar por estado
-        for state in OrderState:
-            stats[state.value] = sum(
-                1 for order in self.all_orders.values() if order.state == state
-            )
+        for o in self.all_orders.values():
+            if o.state == OrderState.AVAILABLE:
+                counts["available"] += 1
+            elif o.state == OrderState.ACCEPTED:
+                counts["accepted"] += 1
+            elif o.state == OrderState.PICKED_UP:
+                counts["picked_up"] += 1
+            elif o.state == OrderState.DELIVERED:
+                counts["delivered"] += 1
+            elif o.state == OrderState.EXPIRED:
+                counts["expired"] += 1
+            elif o.state == OrderState.CANCELLED:
+                counts["cancelled"] += 1
 
+        stats = {
+            "total": len(self.all_orders),
+            "available": counts["available"],
+            "completed": len(self.completed_orders),
+            "expired": counts["expired"],
+            "cancelled": counts["cancelled"],
+            "accepted": counts["accepted"],
+            "picked_up": counts["picked_up"],
+            "delivered": counts["delivered"],
+        }
         return stats
