@@ -138,8 +138,14 @@ class Game:
             self._attempt_move(-1, 0)
         elif key in [pygame.K_d, pygame.K_RIGHT]:
             self._attempt_move(1, 0)
+        # Guardar (F5)
+        elif key == pygame.K_F5:
+            self.save_game_quick("quick.sav")
 
-        # Funcionalidades nuevas
+        # Cargar (F9)
+        elif key == pygame.K_F9:
+            self.load_game_quick("quick.sav")
+
         elif key == pygame.K_SPACE:  # Abrir menú de pedidos
             self.state = GameState.ORDER_SELECTION
         elif key == pygame.K_i:  # Mostrar inventario
@@ -193,6 +199,13 @@ class Game:
             self.state = GameState.PLAYING
         elif key == pygame.K_q:
             self.running = False
+            # Guardar (F5)
+        elif key == pygame.K_F5:
+            self.save_game_quick("quick.sav")
+
+        # Cargar (F9)
+        elif key == pygame.K_F9:
+            self.load_game_quick("quick.sav")
 
     def _handle_game_end_input(self, key):
         """Manejo de input en fin de juego"""
@@ -635,6 +648,24 @@ class Game:
             self._render_pause_overlay()
         elif self.state in [GameState.VICTORY, GameState.GAME_OVER]:
             self._render_game_end()
+        if getattr(self, "_toast_text", None) and time.time() < getattr(
+            self, "_toast_until", 0
+        ):
+            f = pygame.font.Font(None, 28)
+            surf = f.render(self._toast_text, True, self.colors["WHITE"])
+            pad = 10
+            box = pygame.Surface(
+                (surf.get_width() + 2 * pad, surf.get_height() + 2 * pad),
+                pygame.SRCALPHA,
+            )
+            pygame.draw.rect(box, (0, 0, 0, 180), box.get_rect(), border_radius=8)
+            box.blit(surf, (pad, pad))
+            # esquina inferior derecha
+            x = self.screen.get_width() - box.get_width() - 12
+            y = (
+                self.screen.get_height() - box.get_height() - 12 - 140
+            )  # deja despejada tu HUD
+            self.screen.blit(box, (x, y))
 
         pygame.display.flip()
 
@@ -1041,7 +1072,7 @@ class Game:
         )
 
         # ------ Controles (dos líneas si hace falta) ------
-        controls = "ESPACIO = Pedidos  |  I = Ordenar  |  U = Deshacer  |  N/P = Navegar  |  C = Cancelar  |  ESC = Pausa  |  E = Aceptar/Recoger"
+        controls = "ESPACIO = Pedidos  |  I = Ordenar  |  U = Deshacer  |  N/P = Navegar  |  C = Cancelar  |  ESC = Pausa  |  E = Aceptar/Recoger  |  F5 = Guardar Partida  |  F9 = Cargar Partida"
         max_width = panel_w - 24
         font = pygame.font.Font(None, 18)
         words = controls.split()
@@ -1204,7 +1235,9 @@ class Game:
 
         font = pygame.font.Font(None, 24)
         continue_text = font.render(
-            "ESC - Continuar | Q - Salir", True, self.colors["WHITE"]
+            "ESC - Continuar | Q - Salir | F5 - Guardar Partida | F9 - Cargar Partida",
+            True,
+            self.colors["WHITE"],
         )
         continue_rect = continue_text.get_rect(
             center=(self.screen.get_width() // 2, self.screen.get_height() // 2 + 20)
@@ -1433,6 +1466,199 @@ class Game:
         # repoblar cola de prioridad a t=0 por si nos actualizamos en menú
         self.order_manager.update_available_orders(0.0)
         return True
+
+    # ======== Guardado/Carga: helpers ========
+
+    def _build_save_payload(self) -> dict:
+        """Empaqueta el estado del juego usando solo tipos serializables."""
+        # -- Orders: volcamos todos los campos necesarios para reconstruir
+        orders_dump = []
+        for o in self.order_manager.all_orders.values():
+            orders_dump.append(
+                {
+                    "id": o.id,
+                    "pickup": list(o.pickup),
+                    "dropoff": list(o.dropoff),
+                    "payout": int(o.payout),
+                    "deadline": (
+                        o.deadline.isoformat().replace("+00:00", "Z")
+                        if hasattr(o.deadline, "isoformat")
+                        else str(o.deadline)
+                    ),
+                    "weight": float(o.weight),
+                    "priority": int(o.priority),
+                    "release_time": float(o.release_time),
+                    "state": str(
+                        o.state.value if hasattr(o.state, "value") else o.state
+                    ),
+                }
+            )
+
+        # -- Inventario: sólo IDs
+        inv_ids = [o.id for o in self.inventory.orders.to_list()]
+
+        # -- Player snapshot
+        player_dump = {
+            "position": list(self.player.position),
+            "stamina": float(self.player.stamina),
+            "inventory_weight": float(self.player.inventory_weight),
+            "total_earnings": int(self.player.total_earnings),
+            "reputation": int(getattr(self.player, "reputation", 70)),
+            # flags reputación (punto 7)
+            "first_late_discount_used": bool(
+                getattr(self.player, "_first_late_discount_used", False)
+            ),
+        }
+
+        # -- Weather snapshot (mínimo necesario para reponer el aspecto/juego)
+        cond, inten, in_trans = self.weather_manager.get_ui_tuple()
+        weather_dump = {
+            "condition": cond,
+            "intensity": float(inten),
+            "in_transition": bool(in_trans),
+        }
+
+        payload = {
+            "version": 1,
+            "timestamp": time.time(),
+            "game": {
+                "state": (
+                    self.state.value
+                    if hasattr(self.state, "value")
+                    else str(self.state)
+                ),
+                "current_time": float(self.current_time),
+                "game_duration": float(self.game_duration),
+                "late_deliveries": int(getattr(self, "late_deliveries", 0)),
+                "goal": int(self.city.goal),
+                "player": player_dump,
+                "inventory_ids": inv_ids,
+                "orders": orders_dump,
+                "weather": weather_dump,
+            },
+        }
+        return payload
+
+    def _apply_loaded_payload(self, payload: dict) -> bool:
+        """Restaura el estado del juego desde un payload previamente guardado."""
+        try:
+            data = payload.get("game", {})
+            # 1) City: mantenemos el mapa actual; solo ajustamos la meta
+            self.city.goal = int(data.get("goal", self.city.goal))
+
+            # 2) Orders: reconstruir y rehacer colas/listas
+            orders_dump = data.get("orders", [])
+            self.order_manager.load_orders(orders_dump)  # reutilizamos tu loader
+            # Restaurar estados exactos
+            from State.OrderState import OrderState as _OS
+
+            for od in orders_dump:
+                oid = od["id"]
+                st = od.get("state", "available")
+                if oid in self.order_manager.all_orders:
+                    self.order_manager.all_orders[oid].state = _OS(st)
+
+            # 3) Inventario: limpiar y reponer por IDs
+            self.inventory.orders = DoublyLinkedList()
+            self.inventory.orders_by_id.clear()
+            self.inventory.current_weight = 0.0
+            for oid in data.get("inventory_ids", []):
+                if oid in self.order_manager.all_orders:
+                    self.inventory.add_order(self.order_manager.all_orders[oid])
+
+            # 4) Player
+            pd = data.get("player", {})
+            self.player.position = tuple(pd.get("position", self.player.position))
+            self.player.stamina = float(pd.get("stamina", self.player.stamina))
+            self.player.inventory_weight = float(
+                pd.get("inventory_weight", self.inventory.current_weight)
+            )
+            self.player.total_earnings = int(
+                pd.get("total_earnings", self.player.total_earnings)
+            )
+            if hasattr(self.player, "reputation"):
+                self.player.reputation = int(
+                    pd.get("reputation", self.player.reputation)
+                )
+            if hasattr(self.player, "_first_late_discount_used"):
+                self.player._first_late_discount_used = bool(
+                    pd.get("first_late_discount_used", False)
+                )
+
+            # 5) Tiempo de juego y métricas
+            self.current_time = float(data.get("current_time", 0.0))
+            self.game_duration = float(data.get("game_duration", self.game_duration))
+            self.late_deliveries = int(data.get("late_deliveries", 0))
+
+            # 6) Weather (reconstrucción mínima: reinit y fijar estado visible)
+            #    Recargamos config (API/cache), luego pisamos el estado actual.
+            self.refresh_weather()
+            wd = data.get("weather", {})
+            try:
+                # fuerza estado visible
+                self.weather_manager.current.condition = wd.get(
+                    "condition", self.weather_manager.current.condition
+                )
+                self.weather_manager.current.intensity = float(
+                    wd.get("intensity", self.weather_manager.current.intensity)
+                )
+                self.weather_manager.current.m_climate = self.weather_manager._mul_from(
+                    self.weather_manager.current.condition,
+                    self.weather_manager.current.intensity,
+                )
+                # cortar cualquier transición pendiente
+                self.weather_manager.target = None
+                self.weather_manager._trans_t = self.weather_manager._trans_dur = 0.0
+            except Exception:
+                pass
+
+            # 7) Re-poblar cola de disponibles acorde al tiempo de juego
+            self.order_manager.update_available_orders(self.current_time)
+
+            # 8) Estado del juego tras cargar: te dejo en PAUSED para que el jugador decida
+            from State.GameState import GameState as _GS
+
+            self.state = _GS.PAUSED
+
+            # 9) Limpiar flags de fin
+            self._game_end_reason = None
+            self._final_score_data = None
+            self._score_saved = False
+
+            # 10) Sincronizar peso
+            self.player.inventory_weight = self.inventory.current_weight
+
+            return True
+        except Exception as e:
+            print(f"[Load] Error aplicando save: {e}")
+            return False
+
+    def save_game_quick(self, filename: str = "quick.sav") -> bool:
+        """Guarda la partida en /saves/quick.sav"""
+        payload = self._build_save_payload()
+        try:
+            self.file_manager.save_game(payload, filename)
+            self._toast("Partida guardada ✔")
+            return True
+        except Exception as e:
+            print(f"[Save] Error: {e}")
+            self._toast("Error al guardar ✖")
+            return False
+
+    def load_game_quick(self, filename: str = "quick.sav") -> bool:
+        """Carga la partida desde /saves/quick.sav"""
+        data = self.file_manager.load_game(filename)
+        if not data:
+            self._toast("No hay partida guardada")
+            return False
+        ok = self._apply_loaded_payload(data)
+        self._toast("Partida cargada ✔" if ok else "Error al cargar ✖")
+        return ok
+
+    # (Opcional) mensajito overlay 1.5s
+    def _toast(self, text: str, t: float = 1.5):
+        self._toast_text = text
+        self._toast_until = time.time() + t
 
     def load_data_phase3(self):
         """Carga datos con política API-first (actualiza memoria + cache + archivo)."""
