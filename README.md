@@ -91,6 +91,8 @@ python Main.py
 | `I`       | Cambiar modo de ordenamiento del inventario |
 | `N / P`   | Navegar entre pedidos del inventario        |
 | `ESC`     | Pausar / Reanudar                           |
+| `F5`      | Guardar partida                             |
+| `F9`      | Cargar partida                              |
 | `Q`       | Salir del juego                             |
 
 
@@ -144,7 +146,10 @@ Esto garantiza que el juego funcione incluso sin Internet.
 ---
 Autores
 
-Nombres: Santiago Azofeifa Benavides, Carlos Conejo Pearzon, Luis Fallas Brizuela
+-Santiago Azofeifa Benavides
+-Carlos Conejo Pearzon
+-Luis Fallas Brizuela
 Proyecto: Primer Proyecto – Courier Quest
 Curso: Estructura de Datos
+Universidad Nacional de Costa Rica
 Año: 2025
