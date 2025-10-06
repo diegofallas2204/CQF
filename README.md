@@ -13,50 +13,51 @@ El objetivo es **alcanzar la meta de ganancias (`goal`) antes de que el tiempo s
 ---
 
 ## Estructura del proyecto
-
+```
 CQF-main/
 │
-├── api_cache/ # Archivos de caché descargados desde la API
-│ ├── city.json
-│ ├── orders.json
-│ └── weather.json
+├── api_cache/               # Archivos de caché descargados desde la API
+│   ├── city.json
+│   ├── orders.json
+│   └── weather.json
 │
-├── Data/ # Datos locales de respaldo (modo offline)
-│ ├── API.py
-│ ├── city.json
-│ ├── orders.json
-│ ├── weather.json
-│ └── ...
+├── Data/                    # Datos locales de respaldo (modo offline)
+│   ├── API.py
+│   ├── city.json
+│   ├── orders.json
+│   ├── weather.json
+│   └── ...
 │
-├── DataStructure/ # Estructuras de datos implementadas desde cero
-│ ├── DoublyLinkedList.py
-│ ├── PriorityQueue.py
-│ ├── SortingAlgorithms.py
-│ └── Stack.py
+├── DataStructure/           # Estructuras de datos implementadas desde cero
+│   ├── DoublyLinkedList.py
+│   ├── PriorityQueue.py
+│   ├── SortingAlgorithms.py
+│   └── Stack.py
 │
-├── Entities/ # Clases principales del juego
-│ ├── City.py
-│ ├── Order.py
-│ └── Player.py
+├── Entities/                # Clases principales del juego
+│   ├── City.py
+│   ├── Order.py
+│   └── Player.py
 │
-├── Management/ # Controladores y gestores del juego
-│ ├── APIManager.py
-│ ├── CacheManager.py
-│ ├── FileManager.py
-│ ├── GameStateManager.py
-│ ├── Inventory.py
-│ ├── OrderManager.py
-│ ├── ScoreCalculator.py
-│ └── WeatherManager.py
+├── Management/              # Controladores y gestores del juego
+│   ├── APIManager.py
+│   ├── CacheManager.py
+│   ├── FileManager.py
+│   ├── GameStateManager.py
+│   ├── Inventory.py
+│   ├── OrderManager.py
+│   ├── ScoreCalculator.py
+│   └── WeatherManager.py
 │
-├── State/ # Definición de estados del juego
-│ ├── GameState.py
-│ ├── OrderState.py
-│ └── PlayerState.py
+├── State/                   # Definición de estados del juego
+│   ├── GameState.py
+│   ├── OrderState.py
+│   └── PlayerState.py
 │
-├── Game.py # Lógica principal del juego
-├── Main.py # Punto de entrada (main loop)
-└── README.md # ← Este archivo
+├── Game.py                  # Lógica principal del juego
+├── Main.py                  # Punto de entrada (main loop)
+└── README.md                # ← Este archivo
+```
 
 ---
 
