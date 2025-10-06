@@ -147,9 +147,15 @@ Esto garantiza que el juego funcione incluso sin Internet.
 Autores
 
 -Santiago Azofeifa Benavides
+
 -Carlos Conejo Pearzon
+
 -Luis Fallas Brizuela
+
 Proyecto: Primer Proyecto – Courier Quest
+
 Curso: Estructura de Datos
+
 Universidad Nacional de Costa Rica
+
 Año: 2025
