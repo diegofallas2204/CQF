@@ -769,7 +769,7 @@ class Game:
 
     def _render_extended_ui(self):
         """UI extendida optimizada para ventana más pequeña"""
-        font = pygame.font.Font(None, 16)  # Fuente más pequeña
+        font = pygame.font.Font(None, 20)  # Fuente más pequeña
         available_height = self.screen.get_height() - 150
         ui_y_start = available_height + 20  # Justo debajo del mapa
 
@@ -868,7 +868,7 @@ class Game:
         # Sistema de deshacer
         undo_count = self.state_manager.get_undo_count()
         undo_text = f"Deshacer: {undo_count}"
-        text_surface = font.render(undo_text, True, self.colors["CYAN"])
+        text_surface = font.render(undo_text, True, self.colors["BLUE"])
         self.screen.blit(text_surface, (col2_x, row2_y))
 
         # Recuperación
@@ -877,14 +877,14 @@ class Game:
 
         if time_since_movement > self.movement_cooldown:
             recovery_text = "Recuperando +2/s"
-            text_surface = font.render(recovery_text, True, self.colors["GREEN"])
+            text_surface = font.render(recovery_text, True, self.colors["PURPLE"])
             self.screen.blit(text_surface, (col3_x, row2_y))
 
         # Tercera fila: Controles compactos
         row3_y = ui_y_start + 50
-        controls_font = pygame.font.Font(None, 14)
+        controls_font = pygame.font.Font(None, 20)
         controls_text = "ESPACIO = Pedidos // I = Ordenar // U = Deshacer // N/P = Navegar // C = Cancelar // ESC = Pausa // E = Aceptar/Recoger"
-        text_surface = controls_font.render(controls_text, True, self.colors["GRAY"])
+        text_surface = controls_font.render(controls_text, True, self.colors["BLACK"])
         self.screen.blit(text_surface, (col1_x, row3_y))
 
     def _render_order_selection(self):
