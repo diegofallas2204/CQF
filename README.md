@@ -1,18 +1,18 @@
-# 🚚 Courier Quest
+# Courier Quest
 
 **Courier Quest** es un proyecto académico desarrollado como simulador de entregas urbanas, implementado en **Python (3.11+) con Pygame**.  
 El juego combina estructuras de datos avanzadas, gestión de clima dinámico y control de pedidos en tiempo real.
 
 ---
 
-## 🎯 Objetivo del juego
+## Objetivo del juego
 
 El jugador asume el rol de un repartidor que debe cumplir pedidos dentro de una ciudad simulada, enfrentando factores como el clima, la fatiga y el tiempo límite.  
 El objetivo es **alcanzar la meta de ganancias (`goal`) antes de que el tiempo se agote**, manejando el inventario de pedidos y optimizando el recorrido.
 
 ---
 
-## 🧩 Estructura del proyecto
+## Estructura del proyecto
 
 CQF-main/
 │
@@ -60,7 +60,7 @@ CQF-main/
 
 ---
 
-## ⚙️ Instalación y ejecución
+## Instalación y ejecución
 
 ### Requisitos:
 - Python **3.11 o superior**
@@ -80,7 +80,7 @@ pip install pygame requests
 python Main.py
 ```
 ---
-## 🎮 Controles del juego
+## Controles del juego
 | Tecla     | Acción                                      |
 | --------- | ------------------------------------------- |
 | `W/A/S/D` | Moverse                                     |
@@ -113,7 +113,7 @@ Archivos locales (Data/)
 Esto garantiza que el juego funcione incluso sin Internet.
 
 ---
-## 📚 Estructuras de datos implementadas
+## Estructuras de datos implementadas
 | Estructura / Clase                               | Uso                                                           | Complejidad promedio                       |
 | ------------------------------------------------ | ------------------------------------------------------------- | ------------------------------------------ |
 | `DoublyLinkedList`                               | Inventario navegable (pedidos aceptados).                     | Inserción/eliminación O(1), búsqueda O(n). |
