@@ -89,6 +89,14 @@ class AIManager:
         self._game = game
         # Mantener referencia antigua para compatibilidad
         self.game = game
+
+    def reset(self):
+        """Reinicia el agente IA para una nueva partida"""
+        self.agent = self._create_agent(self.difficulty)
+        self.last_tick = time.time()
+        # Reset throttling state
+        self.action_cooldown = 0.0
+        self.last_decision_time = 0.0
     
     def _execute_action(self, action_type: str, *args, **kwargs):
         """

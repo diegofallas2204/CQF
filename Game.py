@@ -10,7 +10,6 @@ import pygame
 from DataStructure.DoublyLinkedList import DoublyLinkedList
 from Entities.City import City
 from Entities.Player import Player
-from Management.AIManager import AIManager
 from Management.APIManager import APIManager
 from Management.CacheManager import CacheManager
 from Management.FileManager import FileManager
@@ -22,6 +21,10 @@ from Management.WeatherManager import WeatherManager
 from State.GameState import GameState
 from State.OrderState import OrderState
 from State.PlayerState import PlayerState
+
+# Nuevos imports para IA (Fase 2)
+from Management.AIManager import AIManager
+from Management.graph_builder import GraphBuilder
 
 
 class Game:
@@ -60,9 +63,16 @@ class Game:
         self.order_manager = OrderManager()
         self.state_manager = GameStateManager()
         self.score_calculator = ScoreCalculator()
-        
-        # AI Manager para jugador CPU
-        self.ai_manager = AIManager(difficulty="easy")
+
+        # ===== Integración IA (Fase 2) =====
+        self.graph_builder = GraphBuilder()
+        ai_difficulty = "easy"  # Cambiar a "easy" | "medium" | "hard" según necesites
+        self.ai_manager = AIManager(difficulty=ai_difficulty, planner=None)
+
+        # Registrar referencias para que AIManager acceda a componentes del juego
+        self.ai_manager.register_game_refs(self.city, self.order_manager, self.weather_manager)
+        self.ai_manager.attach_game(self)  # Permite a AIManager invocar movimientos
+        # ===== fin IA =====
 
         # Control de tiempo
         self.game_start_time = 0.0
@@ -260,21 +270,6 @@ class Game:
                 self.state_manager.history.pop()
             except Exception:
                 pass
-    
-    def _attempt_move_cpu(self, agent, dx: int, dy: int):
-        """Permite al AI mover su agente (sin guardar en historial de deshacer)"""
-        current_x, current_y = agent.position
-        new_x, new_y = current_x + dx, current_y + dy
-        
-        if self.city.is_walkable(new_x, new_y):
-            agent.position = (new_x, new_y)
-            # Actualizar stamina del agente si tiene ese atributo
-            if hasattr(agent, 'stamina'):
-                # Reducir stamina basado en el clima
-                stamina_cost = 5.0 + self.weather_manager.get_stamina_penalty_per_cell()
-                agent.stamina = max(0, agent.stamina - stamina_cost)
-            return True
-        return False
 
     def _get_sorted_available_orders(self):
         """Devuelve la lista de pedidos disponibles según el modo actual."""
@@ -535,6 +530,10 @@ class Game:
         if hasattr(self.player, "_first_late_discount_used"):
             self.player._first_late_discount_used = False
 
+        # Reset IA
+        if hasattr(self, "ai_manager") and self.ai_manager:
+            self.ai_manager.reset()
+
         # Actualizar pedidos disponibles a t=0 (release_time)
         self.order_manager.update_available_orders(0.0)
 
@@ -559,14 +558,6 @@ class Game:
 
         # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
-        
-        # Inicializar AI Manager con referencias del juego
-        self.ai_manager.register_game_refs(self.city, self.order_manager, self.weather_manager)
-        self.ai_manager.attach_game(self)
-        # Configurar throttling según dificultad (easy por defecto)
-        self.ai_manager.min_action_interval = 0.5
-        self.ai_manager.decision_interval = 1.0
-        print(f"[AI] CPU inicializado en dificultad: {self.ai_manager.difficulty}")
 
         # Abrir directamente el menú de selección de pedidos
         self.state = GameState.ORDER_SELECTION
@@ -619,6 +610,21 @@ class Game:
             # Avanzar ráfagas y transiciones del clima
             self.weather_manager.update(delta_time)
 
+            # === Tick de IA (Fase 2) ===
+            try:
+                # Si es dificultad hard, construir/actualizar el grafo
+                if getattr(self.ai_manager, "difficulty", "easy") == "hard":
+                    planner = self.graph_builder.build(self.city, self.weather_manager)
+                    if hasattr(self.ai_manager, "planner") and self.ai_manager.planner is None:
+                        self.ai_manager.planner = planner
+                
+                self.ai_manager.tick(delta_time)
+            except Exception as e:
+                # Proteger el loop principal de excepciones de IA
+                print(f"[IA] Error en tick: {e}")
+                pass
+            # === fin tick IA ===
+
             # Recuperación de resistencia
             current_time = time.time()
             time_since_movement = current_time - self.last_movement_time
@@ -628,10 +634,6 @@ class Game:
                 self.player.recover_stamina(
                     recovery_rate=recovery_rate, delta_time=delta_time
                 )
-            
-            # Actualizar AI (CPU player)
-            if self.ai_manager:
-                self.ai_manager.tick(delta_time)
 
             # Verificar condiciones de juego
             self.check_game_conditions()
@@ -746,9 +748,9 @@ class Game:
 
         # Renderizar jugador
         self._render_player()
-        
-        # Renderizar CPU (AI player)
-        self._render_cpu_player()
+
+        # Renderizar CPU (IA)
+        self._render_cpu()
 
         # UI extendida
         self._render_extended_ui()
@@ -878,34 +880,32 @@ class Game:
         pygame.draw.circle(
             self.screen, self.colors["WHITE"], (cx, cy), tile_size // 4, 2
         )
-    
-    def _render_cpu_player(self):
-        """Renderiza el jugador CPU (AI)"""
-        if not self.city.tiles or not self.ai_manager or not self.ai_manager.agent:
-            return
 
+    def _render_cpu(self):
+        """Dibuja al agente CPU en el mapa"""
+        if not hasattr(self, "ai_manager") or not getattr(self.ai_manager, "agent", None):
+            return
+        
+        agent = self.ai_manager.agent
+        if not self.city.tiles:
+            return
+            
         tile_size, offset_x, offset_y = self._tile_geom()
         if tile_size <= 0:
             return
-
-        x, y = self.ai_manager.agent.position
+        
+        x, y = agent.position
         cx = offset_x + x * tile_size + tile_size // 2
         cy = offset_y + y * tile_size + tile_size // 2
-
-        # Color diferente para CPU (cyan/celeste)
-        color = self.colors["CYAN"]
-
-        # Dibujar círculo para CPU
-        pygame.draw.circle(self.screen, color, (cx, cy), tile_size // 2.2)
-        pygame.draw.circle(
-            self.screen, self.colors["WHITE"], (cx, cy), tile_size // 4, 2
-        )
         
-        # Agregar pequeño indicador "CPU"
-        font = pygame.font.Font(None, max(12, tile_size // 3))
-        cpu_text = font.render("CPU", True, self.colors["BLACK"])
-        text_rect = cpu_text.get_rect(center=(cx, cy))
-        self.screen.blit(cpu_text, text_rect)
+        # Color distintivo para CPU (cyan)
+        pygame.draw.circle(self.screen, self.colors["CYAN"], (cx, cy), max(6, tile_size // 3))
+        pygame.draw.circle(self.screen, self.colors["WHITE"], (cx, cy), max(6, tile_size // 3), 2)
+        
+        # Etiqueta
+        font = pygame.font.Font(None, 16)
+        txt = font.render(f"{agent.name} ({self.ai_manager.difficulty})", True, self.colors["WHITE"])
+        self.screen.blit(txt, (cx - txt.get_width()//2, cy - tile_size//1.8 - 12))
 
     # ---------- Helpers UI ----------
     def _draw_text(self, text, x, y, color, size=22, *, center=False, shadow=True):
@@ -1528,6 +1528,60 @@ class Game:
         # repoblar cola de prioridad a t=0 por si nos actualizamos en menú
         self.order_manager.update_available_orders(0.0)
         return True
+
+    def _attempt_move_cpu(self, ai_agent, dx: int, dy: int):
+        """
+        Mueve al agente AI usando las mismas reglas que el jugador humano.
+        """
+        try:
+            current_x, current_y = ai_agent.position
+            new_x, new_y = current_x + dx, current_y + dy
+
+            if self.city.is_walkable(new_x, new_y):
+                surface_weight = self.city.get_surface_weight(new_x, new_y)
+                
+                # Si el agente tiene el método move_to (igual que Player)
+                if hasattr(ai_agent, "move_to"):
+                    success = ai_agent.move_to(
+                        (new_x, new_y),
+                        climate_multiplier=self.weather_manager.get_speed_multiplier(),
+                        surface_weight=surface_weight,
+                        reputation_multiplier=1.0,
+                        stamina_extra_cost=self.weather_manager.get_stamina_penalty_per_cell(),
+                    )
+                else:
+                    # Fallback simple
+                    ai_agent.position = (new_x, new_y)
+                    if hasattr(ai_agent, "stamina") and ai_agent.stamina > 0:
+                        ai_agent.stamina = max(0.0, ai_agent.stamina - surface_weight)
+                    success = True
+
+                if success:
+                    # Verificar interacciones (pickup/entrega)
+                    self._check_cpu_interactions(ai_agent)
+                    
+        except Exception as e:
+            print(f"[IA] Error en movimiento: {e}")
+
+    def _check_cpu_interactions(self, ai_agent):
+        """Verifica si el CPU debe recoger o entregar pedidos"""
+        try:
+            x, y = ai_agent.position
+            
+            # Si tiene pedidos en inventario, verificar entrega
+            if hasattr(ai_agent, "inventory_ids") and ai_agent.inventory_ids:
+                oid = ai_agent.inventory_ids[0]
+                order = self.order_manager.all_orders.get(oid)
+                
+                if order and order.state == OrderState.PICKED_UP:
+                    if self.city.calculate_manhattan_distance((x, y), order.dropoff) <= 1:
+                        delivered = self.order_manager.deliver_order(order.id)
+                        if delivered:
+                            ai_agent.inventory_ids.remove(order.id)
+                            print(f"[CPU] Pedido {order.id} entregado")
+                            
+        except Exception as e:
+            print(f"[CPU] Error en interacciones: {e}")
 
     # ======== Guardado/Carga: helpers ========
 
