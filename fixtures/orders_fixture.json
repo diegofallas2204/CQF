@@ -1,0 +1,22 @@
+[
+  {
+    "id": "o1",
+    "pickup": [1,0],
+    "dropoff": [3,4],
+    "payout": 100,
+    "weight": 2.0,
+    "priority": 5,
+    "release_time": 0.0,
+    "state": "available"
+  },
+  {
+    "id": "o2",
+    "pickup": [2,2],
+    "dropoff": [4,4],
+    "payout": 40,
+    "weight": 1.0,
+    "priority": 2,
+    "release_time": 0.0,
+    "state": "available"
+  }
+]
