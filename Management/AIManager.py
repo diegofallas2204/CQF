@@ -61,3 +61,8 @@ class AIManager:
     def attach_game(self, game):
         """Permite invocar métodos de game (ej. para mover CPU)"""
         self.game = game
+
+    def reset(self):
+        """Reinicia el agente IA para una nueva partida"""
+        self.agent = self._create_agent(self.difficulty)
+        self.last_tick = time.time()
