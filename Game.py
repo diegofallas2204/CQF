@@ -10,6 +10,7 @@ import pygame
 from DataStructure.DoublyLinkedList import DoublyLinkedList
 from Entities.City import City
 from Entities.Player import Player
+from Management.AIManager import AIManager
 from Management.APIManager import APIManager
 from Management.CacheManager import CacheManager
 from Management.FileManager import FileManager
@@ -59,6 +60,9 @@ class Game:
         self.order_manager = OrderManager()
         self.state_manager = GameStateManager()
         self.score_calculator = ScoreCalculator()
+        
+        # AI Manager para jugador CPU
+        self.ai_manager = AIManager(difficulty="easy")
 
         # Control de tiempo
         self.game_start_time = 0.0
@@ -256,6 +260,21 @@ class Game:
                 self.state_manager.history.pop()
             except Exception:
                 pass
+    
+    def _attempt_move_cpu(self, agent, dx: int, dy: int):
+        """Permite al AI mover su agente (sin guardar en historial de deshacer)"""
+        current_x, current_y = agent.position
+        new_x, new_y = current_x + dx, current_y + dy
+        
+        if self.city.is_walkable(new_x, new_y):
+            agent.position = (new_x, new_y)
+            # Actualizar stamina del agente si tiene ese atributo
+            if hasattr(agent, 'stamina'):
+                # Reducir stamina basado en el clima
+                stamina_cost = 5.0 + self.weather_manager.get_stamina_penalty_per_cell()
+                agent.stamina = max(0, agent.stamina - stamina_cost)
+            return True
+        return False
 
     def _get_sorted_available_orders(self):
         """Devuelve la lista de pedidos disponibles según el modo actual."""
@@ -540,6 +559,14 @@ class Game:
 
         # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
+        
+        # Inicializar AI Manager con referencias del juego
+        self.ai_manager.register_game_refs(self.city, self.order_manager, self.weather_manager)
+        self.ai_manager.attach_game(self)
+        # Configurar throttling según dificultad (easy por defecto)
+        self.ai_manager.min_action_interval = 0.5
+        self.ai_manager.decision_interval = 1.0
+        print(f"[AI] CPU inicializado en dificultad: {self.ai_manager.difficulty}")
 
         # Abrir directamente el menú de selección de pedidos
         self.state = GameState.ORDER_SELECTION
@@ -601,6 +628,10 @@ class Game:
                 self.player.recover_stamina(
                     recovery_rate=recovery_rate, delta_time=delta_time
                 )
+            
+            # Actualizar AI (CPU player)
+            if self.ai_manager:
+                self.ai_manager.tick(delta_time)
 
             # Verificar condiciones de juego
             self.check_game_conditions()
@@ -715,6 +746,9 @@ class Game:
 
         # Renderizar jugador
         self._render_player()
+        
+        # Renderizar CPU (AI player)
+        self._render_cpu_player()
 
         # UI extendida
         self._render_extended_ui()
@@ -844,6 +878,34 @@ class Game:
         pygame.draw.circle(
             self.screen, self.colors["WHITE"], (cx, cy), tile_size // 4, 2
         )
+    
+    def _render_cpu_player(self):
+        """Renderiza el jugador CPU (AI)"""
+        if not self.city.tiles or not self.ai_manager or not self.ai_manager.agent:
+            return
+
+        tile_size, offset_x, offset_y = self._tile_geom()
+        if tile_size <= 0:
+            return
+
+        x, y = self.ai_manager.agent.position
+        cx = offset_x + x * tile_size + tile_size // 2
+        cy = offset_y + y * tile_size + tile_size // 2
+
+        # Color diferente para CPU (cyan/celeste)
+        color = self.colors["CYAN"]
+
+        # Dibujar círculo para CPU
+        pygame.draw.circle(self.screen, color, (cx, cy), tile_size // 2.2)
+        pygame.draw.circle(
+            self.screen, self.colors["WHITE"], (cx, cy), tile_size // 4, 2
+        )
+        
+        # Agregar pequeño indicador "CPU"
+        font = pygame.font.Font(None, max(12, tile_size // 3))
+        cpu_text = font.render("CPU", True, self.colors["BLACK"])
+        text_rect = cpu_text.get_rect(center=(cx, cy))
+        self.screen.blit(cpu_text, text_rect)
 
     # ---------- Helpers UI ----------
     def _draw_text(self, text, x, y, color, size=22, *, center=False, shadow=True):
