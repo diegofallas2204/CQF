@@ -23,9 +23,9 @@ class AIManager:
         
         # ===== Sistema de throttling (Fase 2) =====
         self.action_cooldown = 0.0  # tiempo restante de cooldown
-        self.min_action_interval = 0.5  # mínimo 0.5s entre acciones (ajustable)
+        self.min_action_interval = 0.8  # mínimo 0.8s entre acciones (reducir CPU)
         self.last_decision_time = 0.0
-        self.decision_interval = 1.0  # re-evaluar estrategia cada 1 segundo
+        self.decision_interval = 1.5  # re-evaluar estrategia cada 1.5 segundos (reducir CPU)
         # ==========================================
         
         # Referencias al juego (se setean con register_game_refs y attach_game)
@@ -263,6 +263,7 @@ class AIManager:
                 return
             
             # Movimiento directo (sin aleatoriedad)
+            # Priorizar movimiento en X, luego Y (no diagonal)
             dx = 0
             dy = 0
             
@@ -270,8 +271,8 @@ class AIManager:
                 dx = 1
             elif target[0] < self.agent.position[0]:
                 dx = -1
-            
-            if target[1] > self.agent.position[1]:
+            elif target[1] > self.agent.position[1]:
+                # Solo mover en Y si ya estamos alineados en X
                 dy = 1
             elif target[1] < self.agent.position[1]:
                 dy = -1
@@ -368,6 +369,7 @@ class AIManager:
                     return
             
             # Fallback: movimiento directo (como medium)
+            # Priorizar movimiento en X, luego Y (no diagonal)
             dx = 0
             dy = 0
             
@@ -375,8 +377,8 @@ class AIManager:
                 dx = 1
             elif target[0] < self.agent.position[0]:
                 dx = -1
-            
-            if target[1] > self.agent.position[1]:
+            elif target[1] > self.agent.position[1]:
+                # Solo mover en Y si ya estamos alineados en X
                 dy = 1
             elif target[1] < self.agent.position[1]:
                 dy = -1

@@ -595,9 +595,11 @@ class Game:
         # Aceptar el pedido a través del OrderManager
         accepted_order = self.order_manager.accept_order(order.id)
         if accepted_order:
+            # Cambiar el estado del pedido a ACCEPTED
+            accepted_order.state = OrderState.ACCEPTED
             # Agregar al inventario del agente
             agent.inventory_ids.append(accepted_order.id)
-            print(f"[CPU] Pedido {accepted_order.id} aceptado")
+            print(f"[CPU] Pedido {accepted_order.id} aceptado (estado: {accepted_order.state})")
 
     def start_game(self):
         """Inicia nueva partida y abre inmediatamente el menú de pedidos"""
@@ -650,10 +652,11 @@ class Game:
         # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
 
-        # Abrir directamente el menú de selección de pedidos
-        self.state = GameState.ORDER_SELECTION
+        # Iniciar el juego directamente en modo PLAYING (no abrir menú de pedidos)
+        # El jugador puede abrir el menú con ESPACIO cuando lo necesite
+        self.state = GameState.PLAYING
         self.selected_order_index = 0
-        print("Menú de pedidos abierto automáticamente")
+        print("Juego iniciado en modo PLAYING")
 
         # ↓↓↓ SOLO PARA PRUEBA DE VICTORIA ↓↓↓
         # self.city.goal = 180
