@@ -42,9 +42,9 @@ class AIManager:
         self.action_cooldown = 0.0  # tiempo restante de cooldown
         self.last_decision_time = 0.0
         
-        # ===== Delay de inicio para evitar auto-aceptar =====
-        # Dar al jugador 5 segundos para seleccionar su pedido primero
-        self.startup_delay = 5.0  # segundos antes de que AI empiece a aceptar pedidos
+        # ===== Sin delay de inicio - competencia simultánea =====
+        # Con inventarios separados, ambos pueden jugar desde el inicio
+        self.startup_delay = 0.0  # Sin delay - competencia justa
         self.game_start_time = None
         # ==========================================
         
@@ -197,15 +197,6 @@ class AIManager:
         
         # 1. Si no tiene pedido, moverse hacia uno aleatorio
         if not self.agent.inventory_ids:
-            # Check startup delay
-            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
-                # Durante el delay, solo moverse aleatoriamente
-                dx = random.choice([-1, 0, 1])
-                dy = random.choice([-1, 0, 1])
-                if dx != 0 or dy != 0:
-                    self._execute_action("move", dx, dy)
-                return
-            
             available = self._order_mgr.get_available_orders_by_priority()
             if available:
                 # Elegir uno al azar
@@ -258,12 +249,6 @@ class AIManager:
         
         # 1. Si no tiene pedido aceptado, moverse hacia el mejor pedido disponible
         if not self.agent.inventory_ids:
-            # Check startup delay
-            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
-                # Durante el delay, solo moverse al centro, no buscar pedidos
-                self._move_towards_center()
-                return
-                
             available = self._order_mgr.get_available_orders_by_priority()
             if not available:
                 self._move_towards_center()
@@ -395,14 +380,7 @@ class AIManager:
         from State.OrderState import OrderState
         
         # 1. Si no tiene pedido, evaluar y aceptar el mejor usando el planner
-        # (solo después del delay de inicio para dar ventaja al jugador)
         if not self.agent.inventory_ids:
-            # Check startup delay
-            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
-                # Durante el delay, solo moverse al centro, no aceptar pedidos
-                self._move_towards_center()
-                return
-                
             available = self._order_mgr.get_available_orders_by_priority()
             if not available:
                 self._move_towards_center()

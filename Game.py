@@ -562,20 +562,22 @@ class Game:
             if not order:
                 return
             
-            # Pickup: si está a 1 casilla del pickup y el pedido está ACCEPTED
+            # Pickup: si está en la misma casilla o adyacente al pickup y el pedido está ACCEPTED
             if order.state == OrderState.ACCEPTED:
-                if self.city.calculate_manhattan_distance((x, y), order.pickup) == 1:
+                dist_to_pickup = self.city.calculate_manhattan_distance((x, y), order.pickup)
+                if dist_to_pickup <= 1:
                     if self.order_manager.pickup_order(order.id):
-                        print(f"[CPU] Pedido {order.id} recogido")
+                        print(f"[CPU] Pedido {order.id} recogido (dist={dist_to_pickup})")
             
-            # Delivery: si está a 1 casilla del dropoff y el pedido está PICKED_UP
+            # Delivery: si está en la misma casilla o adyacente al dropoff y el pedido está PICKED_UP
             elif order.state == OrderState.PICKED_UP:
-                if self.city.calculate_manhattan_distance((x, y), order.dropoff) == 1:
+                dist_to_dropoff = self.city.calculate_manhattan_distance((x, y), order.dropoff)
+                if dist_to_dropoff <= 1:
                     delivered = self.order_manager.deliver_order(order.id)
                     if delivered:
                         # Remover del inventario del agente
                         agent.inventory_ids.remove(oid)
-                        print(f"[CPU] Pedido {order.id} entregado. Pago ${delivered.payout}")
+                        print(f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}")
 
     def _cpu_accept_order(self, order):
         """Permite al CPU aceptar un pedido"""
