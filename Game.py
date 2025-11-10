@@ -975,7 +975,7 @@ class Game:
                 text = font.render("P", True, self.colors["WHITE"])
                 self.screen.blit(text, text.get_rect(center=(cx, cy)))
 
-        # Dropoff del pedido actual
+        # Dropoff del pedido actual del jugador
         current_order = self.inventory.get_current_order()
         if current_order and current_order.state in [
             OrderState.ACCEPTED,
@@ -997,6 +997,30 @@ class Game:
                 pygame.draw.line(
                     self.screen, self.colors["YELLOW"], (pxc, pyc), (cx, cy), 3
                 )
+        
+        # Dropoff del pedido actual del AI (en color diferente para distinguir)
+        if hasattr(self, 'ai_manager') and self.ai_manager and self.ai_manager.agent:
+            if self.ai_manager.agent.inventory_ids:
+                ai_order_id = self.ai_manager.agent.inventory_ids[0]
+                ai_order = self.order_manager.all_orders.get(ai_order_id)
+                if ai_order and ai_order.state in [OrderState.ACCEPTED, OrderState.PICKED_UP]:
+                    dx, dy = ai_order.dropoff
+                    cx = offset_x + dx * tile_size + tile_size // 2
+                    cy = offset_y + dy * tile_size + tile_size // 2
+                    # Usar ORANGE para el dropoff del AI
+                    pygame.draw.circle(self.screen, self.colors["ORANGE"], (cx, cy), icon_radius)
+                    pygame.draw.circle(
+                        self.screen, self.colors["WHITE"], (cx, cy), icon_radius, 2
+                    )
+                    text = font.render("D", True, self.colors["WHITE"])
+                    self.screen.blit(text, text.get_rect(center=(cx, cy)))
+                    
+                    if ai_order.state == OrderState.PICKED_UP:
+                        pxc = offset_x + ai_order.pickup[0] * tile_size + tile_size // 2
+                        pyc = offset_y + ai_order.pickup[1] * tile_size + tile_size // 2
+                        pygame.draw.line(
+                            self.screen, self.colors["CYAN"], (pxc, pyc), (cx, cy), 2
+                        )
 
     def _render_player(self):
         if not self.city.tiles:
