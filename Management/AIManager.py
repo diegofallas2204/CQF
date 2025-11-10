@@ -21,11 +21,26 @@ class AIManager:
         self.agent = self._create_agent(difficulty)
         self.last_tick = time.time()
         
-        # ===== Sistema de throttling (Fase 2) =====
+        # ===== Sistema de throttling con velocidad basada en dificultad =====
+        # Configurar velocidades según dificultad:
+        # - Easy (RandomAI): Lento - 1.5s decisión, 0.8s acción
+        # - Medium (HeuristicAI): Medio - 0.8s decisión, 0.4s acción  
+        # - Hard (GraphAI): Rápido - 0.3s decisión, 0.15s acción (¡desafío!)
+        if difficulty == "easy":
+            self.decision_interval = 1.5  # Lento
+            self.min_action_interval = 0.8
+        elif difficulty == "medium":
+            self.decision_interval = 0.8  # Velocidad media
+            self.min_action_interval = 0.4
+        elif difficulty == "hard":
+            self.decision_interval = 0.3  # Muy rápido - desafiante
+            self.min_action_interval = 0.15
+        else:
+            self.decision_interval = 1.5  # Default: easy
+            self.min_action_interval = 0.8
+        
         self.action_cooldown = 0.0  # tiempo restante de cooldown
-        self.min_action_interval = 0.8  # mínimo 0.8s entre acciones (reducir CPU)
         self.last_decision_time = 0.0
-        self.decision_interval = 1.5  # re-evaluar estrategia cada 1.5 segundos (reducir CPU)
         # ==========================================
         
         # Referencias al juego (se setean con register_game_refs y attach_game)
@@ -94,6 +109,20 @@ class AIManager:
         self.last_tick = time.time()
         self.last_decision_time = 0.0
         self.action_cooldown = 0.0
+        
+        # Reconfigurar velocidades según dificultad
+        if self.difficulty == "easy":
+            self.decision_interval = 1.5
+            self.min_action_interval = 0.8
+        elif self.difficulty == "medium":
+            self.decision_interval = 0.8
+            self.min_action_interval = 0.4
+        elif self.difficulty == "hard":
+            self.decision_interval = 0.3
+            self.min_action_interval = 0.15
+        else:
+            self.decision_interval = 1.5
+            self.min_action_interval = 0.8
 
     def _execute_action(self, action_type: str, *args):
         """
