@@ -168,24 +168,82 @@ class AIManager:
         
         center_x = self._city.width // 2
         center_y = self._city.height // 2
+        target = (center_x, center_y)
+        
+        self._move_towards_target(target)
+    
+    def _move_towards_target(self, target):
+        """
+        Mueve el agente hacia un objetivo con obstacle avoidance.
+        Intenta moverse primero en la dirección prioritaria, si está bloqueada
+        intenta la dirección alternativa.
+        """
+        if not self._city:
+            return
         
         current_x, current_y = self.agent.position
+        target_x, target_y = target
         
-        dx = 0
-        dy = 0
+        # Determinar direcciones preferidas
+        dx_pref = 0
+        dy_pref = 0
         
-        if center_x > current_x:
-            dx = 1
-        elif center_x < current_x:
-            dx = -1
+        if target_x > current_x:
+            dx_pref = 1
+        elif target_x < current_x:
+            dx_pref = -1
         
-        if center_y > current_y:
-            dy = 1
-        elif center_y < current_y:
-            dy = -1
+        if target_y > current_y:
+            dy_pref = 1
+        elif target_y < current_y:
+            dy_pref = -1
         
-        if dx != 0 or dy != 0:
-            self._execute_action("move", dx, dy)
+        # Si no hay movimiento necesario
+        if dx_pref == 0 and dy_pref == 0:
+            return
+        
+        # Intentar movimiento en X primero (si es necesario)
+        if dx_pref != 0:
+            new_x = current_x + dx_pref
+            new_y = current_y
+            if self._city.is_walkable(new_x, new_y):
+                self._execute_action("move", dx_pref, 0)
+                return
+        
+        # Si X está bloqueado o ya alineado, intentar Y
+        if dy_pref != 0:
+            new_x = current_x
+            new_y = current_y + dy_pref
+            if self._city.is_walkable(new_x, new_y):
+                self._execute_action("move", 0, dy_pref)
+                return
+        
+        # Si ambas direcciones preferidas están bloqueadas, intentar direcciones alternativas
+        # Intentar otras direcciones para rodear el obstáculo
+        alternative_moves = []
+        
+        if dx_pref == 0:
+            alternative_moves = [(1, 0), (-1, 0)]
+        elif dy_pref == 0:
+            alternative_moves = [(0, 1), (0, -1)]
+        else:
+            # Si ambas son necesarias, agregar opciones perpendiculares
+            if dx_pref != 0 and dy_pref != 0:
+                alternative_moves = [
+                    (0, dy_pref),  # Solo Y
+                    (dx_pref, 0),  # Solo X (ya intentado pero por si acaso)
+                    (-dx_pref, 0), # X opuesto
+                    (0, -dy_pref), # Y opuesto
+                ]
+        
+        for dx, dy in alternative_moves:
+            new_x = current_x + dx
+            new_y = current_y + dy
+            if self._city.is_walkable(new_x, new_y):
+                self._execute_action("move", dx, dy)
+                return
+        
+        # Si todo está bloqueado, no hacer nada (estamos atrapados)
 
     def _easy_behavior(self):
         """
@@ -213,22 +271,9 @@ class AIManager:
                         self._execute_action("accept_order", order)
                         return
                     else:
-                        # Moverse hacia el pedido (con algo de aleatoriedad)
+                        # Moverse hacia el pedido con obstacle avoidance
                         print(f"[Easy AI] Moviéndose hacia {order.id}")
-                        dx = 0
-                        dy = 0
-                        
-                        if target[0] > self.agent.position[0]:
-                            dx = 1
-                        elif target[0] < self.agent.position[0]:
-                            dx = -1
-                        elif target[1] > self.agent.position[1]:
-                            dy = 1
-                        elif target[1] < self.agent.position[1]:
-                            dy = -1
-                        
-                        if dx != 0 or dy != 0:
-                            self._execute_action("move", dx, dy)
+                        self._move_towards_target(target)
                         return
         
         # 2. Movimiento aleatorio si no hay pedidos disponibles
@@ -317,22 +362,9 @@ class AIManager:
                     self._execute_action("accept_order", best_order)
                     return
                 else:
-                    # Moverse hacia el pedido
+                    # Moverse hacia el pedido con obstacle avoidance
                     print(f"[Medium AI] Moviéndose hacia {best_order.id} (dist={dist_to_target})")
-                    dx = 0
-                    dy = 0
-                    
-                    if target[0] > self.agent.position[0]:
-                        dx = 1
-                    elif target[0] < self.agent.position[0]:
-                        dx = -1
-                    elif target[1] > self.agent.position[1]:
-                        dy = 1
-                    elif target[1] < self.agent.position[1]:
-                        dy = -1
-                    
-                    if dx != 0 or dy != 0:
-                        self._execute_action("move", dx, dy)
+                    self._move_towards_target(target)
                     return
         
         # 2. Si tiene pedido, moverse directamente hacia él
@@ -351,23 +383,8 @@ class AIManager:
             else:
                 return
             
-            # Movimiento directo (sin aleatoriedad)
-            # Priorizar movimiento en X, luego Y (no diagonal)
-            dx = 0
-            dy = 0
-            
-            if target[0] > self.agent.position[0]:
-                dx = 1
-            elif target[0] < self.agent.position[0]:
-                dx = -1
-            elif target[1] > self.agent.position[1]:
-                # Solo mover en Y si ya estamos alineados en X
-                dy = 1
-            elif target[1] < self.agent.position[1]:
-                dy = -1
-            
-            if dx != 0 or dy != 0:
-                self._execute_action("move", dx, dy)
+            # Movimiento con obstacle avoidance
+            self._move_towards_target(target)
         
         # 3. Si está idle (no debería pasar), moverse al centro
         else:
@@ -444,21 +461,8 @@ class AIManager:
                         except Exception as e:
                             print(f"[Hard AI] Error usando pathfinding: {e}")
                     
-                    # Fallback: movimiento directo
-                    dx = 0
-                    dy = 0
-                    
-                    if target[0] > self.agent.position[0]:
-                        dx = 1
-                    elif target[0] < self.agent.position[0]:
-                        dx = -1
-                    elif target[1] > self.agent.position[1]:
-                        dy = 1
-                    elif target[1] < self.agent.position[1]:
-                        dy = -1
-                    
-                    if dx != 0 or dy != 0:
-                        self._execute_action("move", dx, dy)
+                    # Fallback: movimiento con obstacle avoidance
+                    self._move_towards_target(target)
                     return
         
         # 2. Si tiene pedido, usar pathfinding para moverse
@@ -500,23 +504,8 @@ class AIManager:
                         self.agent.route.pop(0)
                     return
             
-            # Fallback: movimiento directo (como medium)
-            # Priorizar movimiento en X, luego Y (no diagonal)
-            dx = 0
-            dy = 0
-            
-            if target[0] > self.agent.position[0]:
-                dx = 1
-            elif target[0] < self.agent.position[0]:
-                dx = -1
-            elif target[1] > self.agent.position[1]:
-                # Solo mover en Y si ya estamos alineados en X
-                dy = 1
-            elif target[1] < self.agent.position[1]:
-                dy = -1
-            
-            if dx != 0 or dy != 0:
-                self._execute_action("move", dx, dy)
+            # Fallback: movimiento con obstacle avoidance
+            self._move_towards_target(target)
         
         # 3. Si está idle, moverse al centro
         else:
