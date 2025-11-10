@@ -592,8 +592,8 @@ class Game:
         if order.state != OrderState.AVAILABLE:
             return
         
-        # Aceptar el pedido a través del OrderManager
-        accepted_order = self.order_manager.accept_order(order.id)
+        # Aceptar el pedido a través del OrderManager con tipo 'cpu'
+        accepted_order = self.order_manager.accept_order(order.id, agent_type="cpu")
         if accepted_order:
             # Cambiar el estado del pedido a ACCEPTED
             accepted_order.state = OrderState.ACCEPTED

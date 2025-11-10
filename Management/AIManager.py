@@ -41,6 +41,11 @@ class AIManager:
         
         self.action_cooldown = 0.0  # tiempo restante de cooldown
         self.last_decision_time = 0.0
+        
+        # ===== Delay de inicio para evitar auto-aceptar =====
+        # Dar al jugador 5 segundos para seleccionar su pedido primero
+        self.startup_delay = 5.0  # segundos antes de que AI empiece a aceptar pedidos
+        self.game_start_time = None
         # ==========================================
         
         # Referencias al juego (se setean con register_game_refs y attach_game)
@@ -109,6 +114,9 @@ class AIManager:
         self.last_tick = time.time()
         self.last_decision_time = 0.0
         self.action_cooldown = 0.0
+        
+        # Reiniciar el tiempo de inicio del juego para el delay
+        self.game_start_time = time.time()
         
         # Reconfigurar velocidades según dificultad
         if self.difficulty == "easy":
@@ -186,16 +194,22 @@ class AIManager:
         from State.OrderState import OrderState
         
         # 1. Si no tiene pedido, intentar aceptar uno aleatorio
+        # (solo después del delay de inicio para dar ventaja al jugador)
         if not self.agent.inventory_ids:
-            available = self._order_mgr.get_available_orders_by_priority()
-            if available:
-                # Elegir uno al azar
-                import random
-                order = random.choice(available)
-                if order.state == OrderState.AVAILABLE:
-                    print(f"[Easy AI] Aceptando pedido aleatorio {order.id}")
-                    self._execute_action("accept_order", order)
-                    return
+            # Check startup delay
+            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
+                # Durante el delay, solo moverse, no aceptar pedidos
+                pass
+            else:
+                available = self._order_mgr.get_available_orders_by_priority()
+                if available:
+                    # Elegir uno al azar
+                    import random
+                    order = random.choice(available)
+                    if order.state == OrderState.AVAILABLE:
+                        print(f"[Easy AI] Aceptando pedido aleatorio {order.id}")
+                        self._execute_action("accept_order", order)
+                        return
         
         # 2. Movimiento aleatorio
         import random
@@ -214,7 +228,14 @@ class AIManager:
         from datetime import datetime
         
         # 1. Si no tiene pedido, evaluar y aceptar el mejor
+        # (solo después del delay de inicio para dar ventaja al jugador)
         if not self.agent.inventory_ids:
+            # Check startup delay
+            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
+                # Durante el delay, solo moverse al centro, no aceptar pedidos
+                self._move_towards_center()
+                return
+                
             available = self._order_mgr.get_available_orders_by_priority()
             if not available:
                 self._move_towards_center()
@@ -320,7 +341,14 @@ class AIManager:
         from State.OrderState import OrderState
         
         # 1. Si no tiene pedido, evaluar y aceptar el mejor usando el planner
+        # (solo después del delay de inicio para dar ventaja al jugador)
         if not self.agent.inventory_ids:
+            # Check startup delay
+            if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
+                # Durante el delay, solo moverse al centro, no aceptar pedidos
+                self._move_towards_center()
+                return
+                
             available = self._order_mgr.get_available_orders_by_priority()
             if not available:
                 self._move_towards_center()
