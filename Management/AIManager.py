@@ -189,30 +189,58 @@ class AIManager:
 
     def _easy_behavior(self):
         """
-        Estrategia Easy (RandomAI): Movimiento aleatorio y selección aleatoria de pedidos.
+        Estrategia Easy (RandomAI): Movimiento hacia pedidos aleatorios.
+        NUEVO: Aceptación basada en proximidad - AI debe moverse AL pedido para aceptarlo.
         """
         from State.OrderState import OrderState
+        import random
         
-        # 1. Si no tiene pedido, intentar aceptar uno aleatorio
-        # (solo después del delay de inicio para dar ventaja al jugador)
+        # 1. Si no tiene pedido, moverse hacia uno aleatorio
         if not self.agent.inventory_ids:
             # Check startup delay
             if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
-                # Durante el delay, solo moverse, no aceptar pedidos
-                pass
-            else:
-                available = self._order_mgr.get_available_orders_by_priority()
-                if available:
-                    # Elegir uno al azar
-                    import random
-                    order = random.choice(available)
-                    if order.state == OrderState.AVAILABLE:
-                        print(f"[Easy AI] Aceptando pedido aleatorio {order.id}")
+                # Durante el delay, solo moverse aleatoriamente
+                dx = random.choice([-1, 0, 1])
+                dy = random.choice([-1, 0, 1])
+                if dx != 0 or dy != 0:
+                    self._execute_action("move", dx, dy)
+                return
+            
+            available = self._order_mgr.get_available_orders_by_priority()
+            if available:
+                # Elegir uno al azar
+                order = random.choice(available)
+                if order.state == OrderState.AVAILABLE:
+                    target = order.pickup
+                    dist_to_target = self._city.calculate_manhattan_distance(
+                        self.agent.position, target
+                    )
+                    
+                    # Si estamos a 1 casilla, aceptar el pedido
+                    if dist_to_target <= 1:
+                        print(f"[Easy AI] Cerca de {order.id}, aceptando...")
                         self._execute_action("accept_order", order)
                         return
+                    else:
+                        # Moverse hacia el pedido (con algo de aleatoriedad)
+                        print(f"[Easy AI] Moviéndose hacia {order.id}")
+                        dx = 0
+                        dy = 0
+                        
+                        if target[0] > self.agent.position[0]:
+                            dx = 1
+                        elif target[0] < self.agent.position[0]:
+                            dx = -1
+                        elif target[1] > self.agent.position[1]:
+                            dy = 1
+                        elif target[1] < self.agent.position[1]:
+                            dy = -1
+                        
+                        if dx != 0 or dy != 0:
+                            self._execute_action("move", dx, dy)
+                        return
         
-        # 2. Movimiento aleatorio
-        import random
+        # 2. Movimiento aleatorio si no hay pedidos disponibles
         dx = random.choice([-1, 0, 1])
         dy = random.choice([-1, 0, 1])
         
@@ -222,17 +250,17 @@ class AIManager:
     def _medium_behavior(self):
         """
         Estrategia Medium (HeuristicAI): Usa heurísticas para priorizar pedidos.
+        NUEVO: Aceptación basada en proximidad - AI debe moverse AL pedido para aceptarlo.
         """
         from State.OrderState import OrderState
         import time
         from datetime import datetime
         
-        # 1. Si no tiene pedido, evaluar y aceptar el mejor
-        # (solo después del delay de inicio para dar ventaja al jugador)
+        # 1. Si no tiene pedido aceptado, moverse hacia el mejor pedido disponible
         if not self.agent.inventory_ids:
             # Check startup delay
             if self.game_start_time and (time.time() - self.game_start_time < self.startup_delay):
-                # Durante el delay, solo moverse al centro, no aceptar pedidos
+                # Durante el delay, solo moverse al centro, no buscar pedidos
                 self._move_towards_center()
                 return
                 
@@ -292,9 +320,35 @@ class AIManager:
                     continue
             
             if best_order:
-                print(f"[Medium AI] Seleccionado pedido {best_order.id} con score {best_score:.1f}")
-                self._execute_action("accept_order", best_order)
-                return
+                # NUEVO: En lugar de aceptar remotamente, moverse hacia el pedido
+                target = best_order.pickup
+                dist_to_target = self._city.calculate_manhattan_distance(
+                    self.agent.position, target
+                )
+                
+                # Si estamos a 1 casilla, aceptar el pedido
+                if dist_to_target <= 1:
+                    print(f"[Medium AI] Cerca de {best_order.id}, aceptando...")
+                    self._execute_action("accept_order", best_order)
+                    return
+                else:
+                    # Moverse hacia el pedido
+                    print(f"[Medium AI] Moviéndose hacia {best_order.id} (dist={dist_to_target})")
+                    dx = 0
+                    dy = 0
+                    
+                    if target[0] > self.agent.position[0]:
+                        dx = 1
+                    elif target[0] < self.agent.position[0]:
+                        dx = -1
+                    elif target[1] > self.agent.position[1]:
+                        dy = 1
+                    elif target[1] < self.agent.position[1]:
+                        dy = -1
+                    
+                    if dx != 0 or dy != 0:
+                        self._execute_action("move", dx, dy)
+                    return
         
         # 2. Si tiene pedido, moverse directamente hacia él
         if self.agent.inventory_ids:
@@ -382,9 +436,52 @@ class AIManager:
                     continue
             
             if best_order and best_value > 0:
-                print(f"[Hard AI] Seleccionado pedido {best_order.id} con valor {best_value:.1f}")
-                self._execute_action("accept_order", best_order)
-                return
+                # NUEVO: En lugar de aceptar remotamente, moverse hacia el pedido
+                target = best_order.pickup
+                dist_to_target = self._city.calculate_manhattan_distance(
+                    self.agent.position, target
+                )
+                
+                # Si estamos a 1 casilla, aceptar el pedido
+                if dist_to_target <= 1:
+                    print(f"[Hard AI] Cerca de {best_order.id}, aceptando...")
+                    self._execute_action("accept_order", best_order)
+                    return
+                else:
+                    # Moverse hacia el pedido usando A* si es posible
+                    print(f"[Hard AI] Moviéndose hacia {best_order.id} (valor={best_value:.1f})")
+                    
+                    # Intentar usar pathfinding
+                    if self.planner:
+                        try:
+                            path = self.planner.path(self.agent.position, target)
+                            if path and len(path) > 0:
+                                next_pos = path[0]
+                                dx = next_pos[0] - self.agent.position[0]
+                                dy = next_pos[1] - self.agent.position[1]
+                                
+                                if dx != 0 or dy != 0:
+                                    self._execute_action("move", dx, dy)
+                                return
+                        except Exception as e:
+                            print(f"[Hard AI] Error usando pathfinding: {e}")
+                    
+                    # Fallback: movimiento directo
+                    dx = 0
+                    dy = 0
+                    
+                    if target[0] > self.agent.position[0]:
+                        dx = 1
+                    elif target[0] < self.agent.position[0]:
+                        dx = -1
+                    elif target[1] > self.agent.position[1]:
+                        dy = 1
+                    elif target[1] < self.agent.position[1]:
+                        dy = -1
+                    
+                    if dx != 0 or dy != 0:
+                        self._execute_action("move", dx, dy)
+                    return
         
         # 2. Si tiene pedido, usar pathfinding para moverse
         if self.agent.inventory_ids:
