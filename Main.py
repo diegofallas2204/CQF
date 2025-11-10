@@ -5,7 +5,7 @@ def main():
     if not game.load_data_phase3():
         print("No se pudo iniciar el juego por falta de datos.")
         return
-    game.start_game()
+    # Don't call start_game() directly - let the user select difficulty from menu
     game.run()
 
 
