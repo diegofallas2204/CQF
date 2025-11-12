@@ -100,27 +100,28 @@ class OrderManager:
             available, key_func=lambda order: order.payout, reverse=True
         )
 
-    def accept_order(self, order_id: str) -> Optional[Order]:
-        """Marca pedido como aceptado y lo remueve de disponibles (si posible)"""
+    def accept_order(self, order_id: str, agent_type: str = "player") -> Optional[Order]:
+        """
+        Marca pedido como aceptado y lo remueve de disponibles.
+        agent_type: 'player' o 'cpu' para permitir competencia entre jugador y AI
+        """
         if order_id not in self.all_orders:
             print(f"Error: Pedido {order_id} no encontrado en all_orders")
             return None
 
-        # comprobar si ya existe un pedido aceptado o recogido en todo el sistema
-        for o in self.all_orders.values():
-            if o.state in [OrderState.ACCEPTED, OrderState.PICKED_UP]:
-                print(
-                    f"Error: Ya existe un pedido activo ({o.id}). No se permiten múltiples aceptados."
-                )
-                return None
+        # Removido el check de "un solo pedido activo" para permitir
+        # que jugador y CPU compitan con pedidos simultáneos
 
         order = self.all_orders[order_id]
         if order.state == OrderState.AVAILABLE:
             # Marcar para aceptar (el inventario cambiará el estado definitivamente al agregarlo)
             # Remover de la cola de disponibles
             self.available_orders.remove_by_id(order_id)
+            # Guardar quién aceptó el pedido para tracking
+            if not hasattr(order, 'accepted_by'):
+                order.accepted_by = agent_type
             print(
-                f"Pedido {order_id} removido de la cola de disponibles y listo para aceptar"
+                f"Pedido {order_id} removido de la cola de disponibles y listo para aceptar ({agent_type})"
             )
             return order
         else:

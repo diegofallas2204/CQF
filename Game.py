@@ -53,6 +53,7 @@ class Game:
         self.running = True
         self.state = GameState.MENU
         self.fps = 60
+        self.selected_difficulty = "easy"  # Dificultad por defecto
 
         # Componentes básicos
         self.player = Player()
@@ -117,6 +118,9 @@ class Game:
                 if self.state == GameState.MENU:
                     self._handle_menu_input(event.key)
 
+                elif self.state == GameState.DIFFICULTY_MENU:
+                    self._handle_difficulty_input(event.key)
+
                 elif self.state == GameState.PLAYING:
                     self._handle_game_input(event.key)
 
@@ -132,9 +136,24 @@ class Game:
     def _handle_menu_input(self, key):
         """Manejo de input en menú"""
         if key == pygame.K_SPACE:
-            self.start_game()
+            # En lugar de start_game(), ir a menú de dificultad
+            self.state = GameState.DIFFICULTY_MENU
         elif key in [pygame.K_q, pygame.K_ESCAPE]:
             self.running = False
+
+    def _handle_difficulty_input(self, key):
+        """Manejo de input en menú de dificultad"""
+        if key == pygame.K_1:
+            self.selected_difficulty = "easy"
+            self.start_game()
+        elif key == pygame.K_2:
+            self.selected_difficulty = "medium"
+            self.start_game()
+        elif key == pygame.K_3:
+            self.selected_difficulty = "hard"
+            self.start_game()
+        elif key == pygame.K_ESCAPE:
+            self.state = GameState.MENU
 
     def _handle_game_input(self, key):
         """Manejo de input durante el juego"""
@@ -510,6 +529,80 @@ class Game:
                     return
         print("No hay pedidos disponibles cerca para aceptar.")
 
+    def _attempt_cpu_move(self, dx: int, dy: int):
+        """Intenta mover al agente CPU"""
+        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+            return
+        
+        agent = self.ai_manager.agent
+        current_x, current_y = agent.position
+        new_x, new_y = current_x + dx, current_y + dy
+        
+        # Verificar si la nueva posición es caminable
+        if self.city.is_walkable(new_x, new_y):
+            # Actualizar posición del agente
+            agent.position = (new_x, new_y)
+            
+            # Verificar interacciones en la nueva posición
+            self._check_cpu_location_interactions()
+
+    def _check_cpu_location_interactions(self):
+        """Verifica si el CPU debe recoger o entregar un pedido"""
+        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+            return
+        
+        agent = self.ai_manager.agent
+        x, y = agent.position
+        
+        # Si el agente tiene un pedido
+        if agent.inventory_ids:
+            oid = agent.inventory_ids[0]
+            order = self.order_manager.all_orders.get(oid)
+            
+            if not order:
+                return
+            
+            # Pickup: si está en la misma casilla o adyacente al pickup y el pedido está ACCEPTED
+            if order.state == OrderState.ACCEPTED:
+                dist_to_pickup = self.city.calculate_manhattan_distance((x, y), order.pickup)
+                if dist_to_pickup <= 1:
+                    if self.order_manager.pickup_order(order.id):
+                        print(f"[CPU] Pedido {order.id} recogido (dist={dist_to_pickup})")
+            
+            # Delivery: si está en la misma casilla o adyacente al dropoff y el pedido está PICKED_UP
+            elif order.state == OrderState.PICKED_UP:
+                dist_to_dropoff = self.city.calculate_manhattan_distance((x, y), order.dropoff)
+                if dist_to_dropoff <= 1:
+                    delivered = self.order_manager.deliver_order(order.id)
+                    if delivered:
+                        # Remover del inventario del agente
+                        agent.inventory_ids.remove(oid)
+                        print(f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}")
+
+    def _cpu_accept_order(self, order):
+        """Permite al CPU aceptar un pedido"""
+        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+            return
+        
+        agent = self.ai_manager.agent
+        
+        # Verificar que el CPU no tenga ya un pedido activo
+        if agent.inventory_ids:
+            return
+        
+        # Verificar que el pedido esté disponible
+        if order.state != OrderState.AVAILABLE:
+            return
+        
+        # Aceptar el pedido a través del OrderManager con tipo 'cpu'
+        accepted_order = self.order_manager.accept_order(order.id, agent_type="cpu")
+        if accepted_order:
+            # Cambiar el estado del pedido a ACCEPTED
+            accepted_order.state = OrderState.ACCEPTED
+            # Agregar al inventario del agente
+            agent.inventory_ids.append(accepted_order.id)
+            print(f"[CPU] Pedido {accepted_order.id} aceptado (estado: {accepted_order.state})")
+
     def start_game(self):
         """Inicia nueva partida y abre inmediatamente el menú de pedidos"""
         self.game_start_time = time.time()
@@ -530,9 +623,11 @@ class Game:
         if hasattr(self.player, "_first_late_discount_used"):
             self.player._first_late_discount_used = False
 
-        # Reset IA
+        # Reset IA con la dificultad seleccionada
         if hasattr(self, "ai_manager") and self.ai_manager:
+            self.ai_manager.difficulty = self.selected_difficulty
             self.ai_manager.reset()
+            print(f"[IA] Dificultad configurada: {self.selected_difficulty}")
 
         # Actualizar pedidos disponibles a t=0 (release_time)
         self.order_manager.update_available_orders(0.0)
@@ -559,10 +654,11 @@ class Game:
         # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
 
-        # Abrir directamente el menú de selección de pedidos
-        self.state = GameState.ORDER_SELECTION
+        # Iniciar el juego directamente en modo PLAYING (no abrir menú de pedidos)
+        # El jugador puede abrir el menú con ESPACIO cuando lo necesite
+        self.state = GameState.PLAYING
         self.selected_order_index = 0
-        print("Menú de pedidos abierto automáticamente")
+        print("Juego iniciado en modo PLAYING")
 
         # ↓↓↓ SOLO PARA PRUEBA DE VICTORIA ↓↓↓
         # self.city.goal = 180
@@ -672,6 +768,8 @@ class Game:
 
         if self.state == GameState.MENU:
             self._render_menu()
+        elif self.state == GameState.DIFFICULTY_MENU:
+            self._render_difficulty_menu()
         elif self.state == GameState.PLAYING:
             self._render_game()
         elif self.state == GameState.ORDER_SELECTION:
@@ -737,6 +835,51 @@ class Game:
             color = self.colors["YELLOW"] if i == 0 else self.colors["WHITE"]
             text = font.render(feature, True, color)
             self.screen.blit(text, (50, 450 + i * 25))
+
+    def _render_difficulty_menu(self):
+        """Renderiza menú de selección de dificultad"""
+        # Overlay semi-transparente
+        overlay = pygame.Surface((self.screen.get_width(), self.screen.get_height()))
+        overlay.fill(self.colors["BLACK"])
+        overlay.set_alpha(200)
+        self.screen.blit(overlay, (0, 0))
+        
+        font_title = pygame.font.Font(None, 64)
+        font = pygame.font.Font(None, 36)
+        font_small = pygame.font.Font(None, 24)
+        
+        # Título
+        title_text = font_title.render("Selecciona Dificultad", True, self.colors["WHITE"])
+        title_rect = title_text.get_rect(center=(self.screen.get_width() // 2, 100))
+        self.screen.blit(title_text, title_rect)
+        
+        # Opciones
+        y_start = 200
+        spacing = 100
+        
+        difficulties = [
+            ("1", "FÁCIL", "Movimiento aleatorio, estrategia simple"),
+            ("2", "MEDIO", "Heurísticas: distancia, pago, deadline"),
+            ("3", "DIFÍCIL", "A* pathfinding, planificación óptima"),
+        ]
+        
+        for i, (key, name, desc) in enumerate(difficulties):
+            y = y_start + i * spacing
+            
+            # Número y nombre
+            text = font.render(f"{key}. {name}", True, self.colors["YELLOW"])
+            text_rect = text.get_rect(center=(self.screen.get_width() // 2, y))
+            self.screen.blit(text, text_rect)
+            
+            # Descripción
+            desc_text = font_small.render(desc, True, self.colors["GRAY"])
+            desc_rect = desc_text.get_rect(center=(self.screen.get_width() // 2, y + 30))
+            self.screen.blit(desc_text, desc_rect)
+        
+        # Instrucciones
+        back_text = font_small.render("ESC - Volver", True, self.colors["WHITE"])
+        back_rect = back_text.get_rect(center=(self.screen.get_width() // 2, 550))
+        self.screen.blit(back_text, back_rect)
 
     def _render_game(self):
         """Renderizado extendido del juego"""
@@ -834,7 +977,7 @@ class Game:
                 text = font.render("P", True, self.colors["WHITE"])
                 self.screen.blit(text, text.get_rect(center=(cx, cy)))
 
-        # Dropoff del pedido actual
+        # Dropoff del pedido actual del jugador
         current_order = self.inventory.get_current_order()
         if current_order and current_order.state in [
             OrderState.ACCEPTED,
@@ -856,6 +999,30 @@ class Game:
                 pygame.draw.line(
                     self.screen, self.colors["YELLOW"], (pxc, pyc), (cx, cy), 3
                 )
+        
+        # Dropoff del pedido actual del AI (en color diferente para distinguir)
+        if hasattr(self, 'ai_manager') and self.ai_manager and self.ai_manager.agent:
+            if self.ai_manager.agent.inventory_ids:
+                ai_order_id = self.ai_manager.agent.inventory_ids[0]
+                ai_order = self.order_manager.all_orders.get(ai_order_id)
+                if ai_order and ai_order.state in [OrderState.ACCEPTED, OrderState.PICKED_UP]:
+                    dx, dy = ai_order.dropoff
+                    cx = offset_x + dx * tile_size + tile_size // 2
+                    cy = offset_y + dy * tile_size + tile_size // 2
+                    # Usar ORANGE para el dropoff del AI
+                    pygame.draw.circle(self.screen, self.colors["ORANGE"], (cx, cy), icon_radius)
+                    pygame.draw.circle(
+                        self.screen, self.colors["WHITE"], (cx, cy), icon_radius, 2
+                    )
+                    text = font.render("D", True, self.colors["WHITE"])
+                    self.screen.blit(text, text.get_rect(center=(cx, cy)))
+                    
+                    if ai_order.state == OrderState.PICKED_UP:
+                        pxc = offset_x + ai_order.pickup[0] * tile_size + tile_size // 2
+                        pyc = offset_y + ai_order.pickup[1] * tile_size + tile_size // 2
+                        pygame.draw.line(
+                            self.screen, self.colors["CYAN"], (pxc, pyc), (cx, cy), 2
+                        )
 
     def _render_player(self):
         if not self.city.tiles:
