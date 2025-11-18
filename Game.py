@@ -10,10 +10,14 @@ import pygame
 from DataStructure.DoublyLinkedList import DoublyLinkedList
 from Entities.City import City
 from Entities.Player import Player
+
+# Nuevos imports para IA (Fase 2)
+from Management.AIManager import AIManager
 from Management.APIManager import APIManager
 from Management.CacheManager import CacheManager
 from Management.FileManager import FileManager
 from Management.GameStateManager import GameStateManager
+from Management.graph_builder import GraphBuilder
 from Management.Inventory import Inventory
 from Management.OrderManager import OrderManager
 from Management.ScoreCalculator import ScoreCalculator
@@ -21,10 +25,6 @@ from Management.WeatherManager import WeatherManager
 from State.GameState import GameState
 from State.OrderState import OrderState
 from State.PlayerState import PlayerState
-
-# Nuevos imports para IA (Fase 2)
-from Management.AIManager import AIManager
-from Management.graph_builder import GraphBuilder
 
 
 class Game:
@@ -67,12 +67,8 @@ class Game:
 
         # ===== Integración IA (Fase 2) =====
         self.graph_builder = GraphBuilder()
-        ai_difficulty = "easy"  # Cambiar a "easy" | "medium" | "hard" según necesites
-        self.ai_manager = AIManager(difficulty=ai_difficulty, planner=None)
-
-        # Registrar referencias para que AIManager acceda a componentes del juego
-        self.ai_manager.register_game_refs(self.city, self.order_manager, self.weather_manager)
-        self.ai_manager.attach_game(self)  # Permite a AIManager invocar movimientos
+        # NO crear AIManager aquí - se creará en start_game() con el planner correcto
+        self.ai_manager = None  # ✅ Inicializar como None
         # ===== fin IA =====
 
         # Control de tiempo
@@ -531,69 +527,89 @@ class Game:
 
     def _attempt_cpu_move(self, dx: int, dy: int):
         """Intenta mover al agente CPU"""
-        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+        if (
+            not hasattr(self, "ai_manager")
+            or not self.ai_manager
+            or not self.ai_manager.agent
+        ):
             return
-        
+
         agent = self.ai_manager.agent
         current_x, current_y = agent.position
         new_x, new_y = current_x + dx, current_y + dy
-        
+
         # Verificar si la nueva posición es caminable
         if self.city.is_walkable(new_x, new_y):
             # Actualizar posición del agente
             agent.position = (new_x, new_y)
-            
+
             # Verificar interacciones en la nueva posición
             self._check_cpu_location_interactions()
 
     def _check_cpu_location_interactions(self):
         """Verifica si el CPU debe recoger o entregar un pedido"""
-        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+        if (
+            not hasattr(self, "ai_manager")
+            or not self.ai_manager
+            or not self.ai_manager.agent
+        ):
             return
-        
+
         agent = self.ai_manager.agent
         x, y = agent.position
-        
+
         # Si el agente tiene un pedido
         if agent.inventory_ids:
             oid = agent.inventory_ids[0]
             order = self.order_manager.all_orders.get(oid)
-            
+
             if not order:
                 return
-            
+
             # Pickup: si está en la misma casilla o adyacente al pickup y el pedido está ACCEPTED
             if order.state == OrderState.ACCEPTED:
-                dist_to_pickup = self.city.calculate_manhattan_distance((x, y), order.pickup)
+                dist_to_pickup = self.city.calculate_manhattan_distance(
+                    (x, y), order.pickup
+                )
                 if dist_to_pickup <= 1:
                     if self.order_manager.pickup_order(order.id):
-                        print(f"[CPU] Pedido {order.id} recogido (dist={dist_to_pickup})")
-            
+                        print(
+                            f"[CPU] Pedido {order.id} recogido (dist={dist_to_pickup})"
+                        )
+
             # Delivery: si está en la misma casilla o adyacente al dropoff y el pedido está PICKED_UP
             elif order.state == OrderState.PICKED_UP:
-                dist_to_dropoff = self.city.calculate_manhattan_distance((x, y), order.dropoff)
+                dist_to_dropoff = self.city.calculate_manhattan_distance(
+                    (x, y), order.dropoff
+                )
                 if dist_to_dropoff <= 1:
                     delivered = self.order_manager.deliver_order(order.id)
                     if delivered:
                         # Remover del inventario del agente
                         agent.inventory_ids.remove(oid)
-                        print(f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}")
+                        print(
+                            f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}"
+                        )
 
     def _cpu_accept_order(self, order):
         """Permite al CPU aceptar un pedido"""
-        if not hasattr(self, 'ai_manager') or not self.ai_manager or not self.ai_manager.agent:
+        if (
+            not hasattr(self, "ai_manager")
+            or not self.ai_manager
+            or not self.ai_manager.agent
+        ):
             return
-        
+
         agent = self.ai_manager.agent
-        
+
         # Verificar que el CPU no tenga ya un pedido activo
         if agent.inventory_ids:
             return
-        
+
         # Verificar que el pedido esté disponible
         if order.state != OrderState.AVAILABLE:
             return
-        
+
         # Aceptar el pedido a través del OrderManager con tipo 'cpu'
         accepted_order = self.order_manager.accept_order(order.id, agent_type="cpu")
         if accepted_order:
@@ -601,10 +617,12 @@ class Game:
             accepted_order.state = OrderState.ACCEPTED
             # Agregar al inventario del agente
             agent.inventory_ids.append(accepted_order.id)
-            print(f"[CPU] Pedido {accepted_order.id} aceptado (estado: {accepted_order.state})")
+            print(
+                f"[CPU] Pedido {accepted_order.id} aceptado (estado: {accepted_order.state})"
+            )
 
     def start_game(self):
-        """Inicia nueva partida y abre inmediatamente el menú de pedidos"""
+        """Inicia nueva partida con todas las correcciones aplicadas"""
         self.game_start_time = time.time()
         self.current_time = 0.0
         self.last_movement_time = time.time()
@@ -614,56 +632,97 @@ class Game:
         self.inventory = Inventory()
         self.state_manager.clear_history()
 
-        # ---- Punto 9: reset métricas/flags
+        # Reset métricas/flags
         self.late_deliveries = 0
         self._game_end_reason = None
         self._final_score_data = None
         self._score_saved = False
-        # Punto 7: reset de “primera tardanza con rep alta”
         if hasattr(self.player, "_first_late_discount_used"):
             self.player._first_late_discount_used = False
 
-        # Reset IA con la dificultad seleccionada
-        if hasattr(self, "ai_manager") and self.ai_manager:
-            self.ai_manager.difficulty = self.selected_difficulty
-            self.ai_manager.reset()
-            print(f"[IA] Dificultad configurada: {self.selected_difficulty}")
+        # ✅ ORDEN CORRECTO:
+        # 1. Asegurar que los pedidos ya están cargados (esto debería pasar en Main.py)
+        # 2. Validar ubicaciones de pedidos
+        if hasattr(self.order_manager, "validate_order_locations"):
+            invalid_count = self.order_manager.validate_order_locations(self.city)
+            if invalid_count > 0:
+                print(
+                    f"⚠️ Se invalidaron {invalid_count} pedidos con ubicaciones bloqueadas"
+                )
 
-        # Actualizar pedidos disponibles a t=0 (release_time)
+        # 3. Actualizar pedidos disponibles DESPUÉS de validar
         self.order_manager.update_available_orders(0.0)
 
-        # Inicializar configuración de clima (API/cache/file o fallback)
+        # Inicializar/Resetear IA con planner reconstruido
+        if hasattr(self, "ai_manager") and self.ai_manager:
+            self.ai_manager.difficulty = self.selected_difficulty
+
+            if self.selected_difficulty == "hard":
+                print(f"[IA] Invalidando cache del grafo...")
+                self.graph_builder._cached_city_id = None
+                self.graph_builder._cached_graph = None
+                planner = self.graph_builder.build(self.city, self.weather_manager)
+                self.ai_manager.planner = planner
+                print(f"[IA] Grafo reconstruido: {len(planner.adj)} nodos")
+
+                if hasattr(planner, "validate_graph"):
+                    planner.validate_graph()
+            else:
+                self.ai_manager.planner = None
+
+            self.ai_manager.reset()
+            print(f"[IA] Dificultad configurada: {self.selected_difficulty}")
+        else:
+            planner = None
+            if self.selected_difficulty == "hard":
+                print(f"[IA] Creando grafo inicial...")
+                self.graph_builder._cached_city_id = None
+                self.graph_builder._cached_graph = None
+                planner = self.graph_builder.build(self.city, self.weather_manager)
+                print(f"[IA] Grafo inicial creado: {len(planner.adj)} nodos")
+
+                if hasattr(planner, "validate_graph"):
+                    planner.validate_graph()
+
+            self.ai_manager = AIManager(
+                difficulty=self.selected_difficulty, planner=planner
+            )
+            self.ai_manager.register_game_refs(
+                self.city, self.order_manager, self.weather_manager
+            )
+            self.ai_manager.attach_game(self)
+            self.ai_manager.agent = self.ai_manager._create_agent(
+                self.selected_difficulty
+            )
+            print(f"[IA] AIManager creado - Dificultad: {self.selected_difficulty}")
+
+        # Inicializar clima
         self.refresh_weather()
 
-        # --- DEBUG: acelerar clima para pruebas ---
+        # DEBUG: acelerar clima para pruebas
         try:
-            self.weather_manager._rand_burst = lambda: 12  # cada ~12 s
+            self.weather_manager._rand_burst = lambda: 12
             self.weather_manager._rand_transition = lambda: 2
             self.weather_manager._burst_dur = 12
             self.weather_manager._t = min(self.weather_manager._t, 11.0)
         except Exception:
             pass
-        # --- fin DEBUG ---
 
-        # Debug: Verificar que hay pedidos disponibles
+        # Debug: Verificar pedidos disponibles
         available = self.order_manager.get_available_orders_by_priority()
         print(f"Juego iniciado con {len(available)} pedidos disponibles")
-        for order in available:
-            print(f"  - {order.id}: prioridad {order.priority}, pago ${order.payout}")
+        for order in available[:5]:  # Solo mostrar primeros 5
+            pickup_valid = self.city.is_walkable(order.pickup[0], order.pickup[1])
+            dropoff_valid = self.city.is_walkable(order.dropoff[0], order.dropoff[1])
+            print(
+                f"  - {order.id}: pickup={order.pickup} (✓ {pickup_valid}), dropoff={order.dropoff} (✓ {dropoff_valid}), pago=${order.payout}"
+            )
 
-        # Sincronizar peso del jugador con el inventario
         self.player.inventory_weight = self.inventory.current_weight
-
-        # Iniciar el juego directamente en modo PLAYING (no abrir menú de pedidos)
-        # El jugador puede abrir el menú con ESPACIO cuando lo necesite
         self.state = GameState.PLAYING
         self.selected_order_index = 0
         print("Juego iniciado en modo PLAYING")
-
-        # ↓↓↓ SOLO PARA PRUEBA DE VICTORIA ↓↓↓
-        # self.city.goal = 180
-        print(f"[DEBUG] Meta de ingresos forzada a ${self.city.goal}")
-        # ↑↑↑ BORRAR/COMENTAR PARA ENTREGA ↑↑↑
+        print(f"[DEBUG] Meta de ingresos: ${self.city.goal}")
 
     def _reset_game(self):
         """Resetea el juego para nueva partida"""
@@ -711,9 +770,12 @@ class Game:
                 # Si es dificultad hard, construir/actualizar el grafo
                 if getattr(self.ai_manager, "difficulty", "easy") == "hard":
                     planner = self.graph_builder.build(self.city, self.weather_manager)
-                    if hasattr(self.ai_manager, "planner") and self.ai_manager.planner is None:
+                    if (
+                        hasattr(self.ai_manager, "planner")
+                        and self.ai_manager.planner is None
+                    ):
                         self.ai_manager.planner = planner
-                
+
                 self.ai_manager.tick(delta_time)
             except Exception as e:
                 # Proteger el loop principal de excepciones de IA
@@ -843,39 +905,43 @@ class Game:
         overlay.fill(self.colors["BLACK"])
         overlay.set_alpha(200)
         self.screen.blit(overlay, (0, 0))
-        
+
         font_title = pygame.font.Font(None, 64)
         font = pygame.font.Font(None, 36)
         font_small = pygame.font.Font(None, 24)
-        
+
         # Título
-        title_text = font_title.render("Selecciona Dificultad", True, self.colors["WHITE"])
+        title_text = font_title.render(
+            "Selecciona Dificultad", True, self.colors["WHITE"]
+        )
         title_rect = title_text.get_rect(center=(self.screen.get_width() // 2, 100))
         self.screen.blit(title_text, title_rect)
-        
+
         # Opciones
         y_start = 200
         spacing = 100
-        
+
         difficulties = [
             ("1", "FÁCIL", "Movimiento aleatorio, estrategia simple"),
             ("2", "MEDIO", "Heurísticas: distancia, pago, deadline"),
             ("3", "DIFÍCIL", "A* pathfinding, planificación óptima"),
         ]
-        
+
         for i, (key, name, desc) in enumerate(difficulties):
             y = y_start + i * spacing
-            
+
             # Número y nombre
             text = font.render(f"{key}. {name}", True, self.colors["YELLOW"])
             text_rect = text.get_rect(center=(self.screen.get_width() // 2, y))
             self.screen.blit(text, text_rect)
-            
+
             # Descripción
             desc_text = font_small.render(desc, True, self.colors["GRAY"])
-            desc_rect = desc_text.get_rect(center=(self.screen.get_width() // 2, y + 30))
+            desc_rect = desc_text.get_rect(
+                center=(self.screen.get_width() // 2, y + 30)
+            )
             self.screen.blit(desc_text, desc_rect)
-        
+
         # Instrucciones
         back_text = font_small.render("ESC - Volver", True, self.colors["WHITE"])
         back_rect = back_text.get_rect(center=(self.screen.get_width() // 2, 550))
@@ -999,24 +1065,29 @@ class Game:
                 pygame.draw.line(
                     self.screen, self.colors["YELLOW"], (pxc, pyc), (cx, cy), 3
                 )
-        
+
         # Dropoff del pedido actual del AI (en color diferente para distinguir)
-        if hasattr(self, 'ai_manager') and self.ai_manager and self.ai_manager.agent:
+        if hasattr(self, "ai_manager") and self.ai_manager and self.ai_manager.agent:
             if self.ai_manager.agent.inventory_ids:
                 ai_order_id = self.ai_manager.agent.inventory_ids[0]
                 ai_order = self.order_manager.all_orders.get(ai_order_id)
-                if ai_order and ai_order.state in [OrderState.ACCEPTED, OrderState.PICKED_UP]:
+                if ai_order and ai_order.state in [
+                    OrderState.ACCEPTED,
+                    OrderState.PICKED_UP,
+                ]:
                     dx, dy = ai_order.dropoff
                     cx = offset_x + dx * tile_size + tile_size // 2
                     cy = offset_y + dy * tile_size + tile_size // 2
                     # Usar ORANGE para el dropoff del AI
-                    pygame.draw.circle(self.screen, self.colors["ORANGE"], (cx, cy), icon_radius)
+                    pygame.draw.circle(
+                        self.screen, self.colors["ORANGE"], (cx, cy), icon_radius
+                    )
                     pygame.draw.circle(
                         self.screen, self.colors["WHITE"], (cx, cy), icon_radius, 2
                     )
                     text = font.render("D", True, self.colors["WHITE"])
                     self.screen.blit(text, text.get_rect(center=(cx, cy)))
-                    
+
                     if ai_order.state == OrderState.PICKED_UP:
                         pxc = offset_x + ai_order.pickup[0] * tile_size + tile_size // 2
                         pyc = offset_y + ai_order.pickup[1] * tile_size + tile_size // 2
@@ -1050,29 +1121,37 @@ class Game:
 
     def _render_cpu(self):
         """Dibuja al agente CPU en el mapa"""
-        if not hasattr(self, "ai_manager") or not getattr(self.ai_manager, "agent", None):
+        if not hasattr(self, "ai_manager") or not getattr(
+            self.ai_manager, "agent", None
+        ):
             return
-        
+
         agent = self.ai_manager.agent
         if not self.city.tiles:
             return
-            
+
         tile_size, offset_x, offset_y = self._tile_geom()
         if tile_size <= 0:
             return
-        
+
         x, y = agent.position
         cx = offset_x + x * tile_size + tile_size // 2
         cy = offset_y + y * tile_size + tile_size // 2
-        
+
         # Color distintivo para CPU (cyan)
-        pygame.draw.circle(self.screen, self.colors["CYAN"], (cx, cy), max(6, tile_size // 3))
-        pygame.draw.circle(self.screen, self.colors["WHITE"], (cx, cy), max(6, tile_size // 3), 2)
-        
+        pygame.draw.circle(
+            self.screen, self.colors["CYAN"], (cx, cy), max(6, tile_size // 3)
+        )
+        pygame.draw.circle(
+            self.screen, self.colors["WHITE"], (cx, cy), max(6, tile_size // 3), 2
+        )
+
         # Etiqueta
         font = pygame.font.Font(None, 16)
-        txt = font.render(f"{agent.name} ({self.ai_manager.difficulty})", True, self.colors["WHITE"])
-        self.screen.blit(txt, (cx - txt.get_width()//2, cy - tile_size//1.8 - 12))
+        txt = font.render(
+            f"{agent.name} ({self.ai_manager.difficulty})", True, self.colors["WHITE"]
+        )
+        self.screen.blit(txt, (cx - txt.get_width() // 2, cy - tile_size // 1.8 - 12))
 
     # ---------- Helpers UI ----------
     def _draw_text(self, text, x, y, color, size=22, *, center=False, shadow=True):
@@ -1706,7 +1785,7 @@ class Game:
 
             if self.city.is_walkable(new_x, new_y):
                 surface_weight = self.city.get_surface_weight(new_x, new_y)
-                
+
                 # Si el agente tiene el método move_to (igual que Player)
                 if hasattr(ai_agent, "move_to"):
                     success = ai_agent.move_to(
@@ -1726,7 +1805,7 @@ class Game:
                 if success:
                     # Verificar interacciones (pickup/entrega)
                     self._check_cpu_interactions(ai_agent)
-                    
+
         except Exception as e:
             print(f"[IA] Error en movimiento: {e}")
 
@@ -1734,19 +1813,22 @@ class Game:
         """Verifica si el CPU debe recoger o entregar pedidos"""
         try:
             x, y = ai_agent.position
-            
+
             # Si tiene pedidos en inventario, verificar entrega
             if hasattr(ai_agent, "inventory_ids") and ai_agent.inventory_ids:
                 oid = ai_agent.inventory_ids[0]
                 order = self.order_manager.all_orders.get(oid)
-                
+
                 if order and order.state == OrderState.PICKED_UP:
-                    if self.city.calculate_manhattan_distance((x, y), order.dropoff) <= 1:
+                    if (
+                        self.city.calculate_manhattan_distance((x, y), order.dropoff)
+                        <= 1
+                    ):
                         delivered = self.order_manager.deliver_order(order.id)
                         if delivered:
                             ai_agent.inventory_ids.remove(order.id)
                             print(f"[CPU] Pedido {order.id} entregado")
-                            
+
         except Exception as e:
             print(f"[CPU] Error en interacciones: {e}")
 

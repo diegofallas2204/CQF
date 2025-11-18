@@ -10,7 +10,8 @@ from typing import Dict, Tuple, Iterable, List, Optional
 import heapq
 import math
 
-Node = Tuple[int,int]
+Node = Tuple[int, int]
+
 
 class Graph:
     def __init__(self):
@@ -20,7 +21,8 @@ class Graph:
         self.adj.setdefault(n, {})
 
     def add_edge(self, a: Node, b: Node, w: float = 1.0):
-        self.add_node(a); self.add_node(b)
+        self.add_node(a)
+        self.add_node(b)
         self.adj[a][b] = w
 
     def neighbors(self, n: Node) -> Iterable[Node]:
@@ -33,9 +35,10 @@ class Graph:
         dist = {start: 0.0}
         pq = [(0.0, start)]
         while pq:
-            d,u = heapq.heappop(pq)
-            if d > dist.get(u, math.inf): continue
-            for v,w in self.adj.get(u,{}).items():
+            d, u = heapq.heappop(pq)
+            if d > dist.get(u, math.inf):
+                continue
+            for v, w in self.adj.get(u, {}).items():
                 nd = d + w
                 if nd < dist.get(v, math.inf):
                     dist[v] = nd
@@ -48,7 +51,7 @@ class Graph:
         Retorna lista de nodos desde start (excluido) a goal (incluido) o None si no hay path.
         """
         if heuristic is None:
-            heuristic = lambda a,b: abs(a[0]-b[0]) + abs(a[1]-b[1])
+            heuristic = lambda a, b: abs(a[0] - b[0]) + abs(a[1] - b[1])
         open_set = [(heuristic(start, goal), 0.0, start, None)]
         came_from = {}
         gscore = {start: 0.0}
@@ -79,9 +82,40 @@ class Graph:
     # helper para estimación de coste entre dos nodos (puede usar dijkstra o heurística)
     def estimate_cost(self, a: Node, b: Node) -> float:
         # por defecto, usar Manhattan (rápido)
-        return abs(a[0]-b[0]) + abs(a[1]-b[1])
+        return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
     # wrapper path method
     def path(self, a: Node, b: Node) -> List[Node]:
-        p = self.astar(a,b)
+        p = self.astar(a, b)
         return p or []
+
+    def validate_graph(self):
+        """
+        Método de debug para validar que el grafo está bien construido.
+        Imprime información sobre nodos y aristas.
+
+        Returns:
+            True si el grafo es válido, False en caso contrario
+        """
+        print(f"[Graph] Validando grafo con {len(self.adj)} nodos")
+
+        total_edges = 0
+        for node, neighbors in self.adj.items():
+            total_edges += len(neighbors)
+
+        print(f"[Graph] Total de aristas: {total_edges}")
+
+        # Verificar que hay al menos algunos nodos
+        if len(self.adj) == 0:
+            print("[Graph] ⚠️ ADVERTENCIA: Grafo vacío!")
+            return False
+
+        # Mostrar algunos nodos de ejemplo
+        sample_nodes = list(self.adj.keys())[:5]
+        print(f"[Graph] Nodos de ejemplo: {sample_nodes}")
+
+        for node in sample_nodes:
+            neighbors = list(self.adj[node].keys())
+            print(f"  {node} -> {neighbors[:5]}")  # Solo primeros 5 vecinos
+
+        return True

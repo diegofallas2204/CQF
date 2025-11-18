@@ -53,6 +53,32 @@ class OrderManager:
 
             self.all_orders[order.id] = order
 
+    def validate_order_locations(self, city) -> int:
+        """
+        Valida que todos los pedidos tengan pickup y dropoff en posiciones caminables.
+        Solo reporta, NO modifica el estado.
+
+        Args:
+            city: Instancia de City para validar posiciones
+
+        Returns:
+            Número de pedidos con ubicaciones inválidas
+        """
+        invalid_count = 0
+        for order in self.all_orders.values():
+            pickup_valid = city.is_walkable(order.pickup[0], order.pickup[1])
+            dropoff_valid = city.is_walkable(order.dropoff[0], order.dropoff[1])
+
+            if not pickup_valid or not dropoff_valid:
+                print(f"⚠️ Pedido {order.id} tiene ubicación problemática:")
+                if not pickup_valid:
+                    print(f"   Pickup {order.pickup} NO es caminable")
+                if not dropoff_valid:
+                    print(f"   Dropoff {order.dropoff} NO es caminable")
+                invalid_count += 1
+
+        return invalid_count
+
     def update_available_orders(self, current_game_time: float):
         """Actualiza pedidos disponibles basado en release_time"""
         # Obtener IDs ya en la cola para evitar duplicados
@@ -100,7 +126,9 @@ class OrderManager:
             available, key_func=lambda order: order.payout, reverse=True
         )
 
-    def accept_order(self, order_id: str, agent_type: str = "player") -> Optional[Order]:
+    def accept_order(
+        self, order_id: str, agent_type: str = "player"
+    ) -> Optional[Order]:
         """
         Marca pedido como aceptado y lo remueve de disponibles.
         agent_type: 'player' o 'cpu' para permitir competencia entre jugador y AI
@@ -118,7 +146,7 @@ class OrderManager:
             # Remover de la cola de disponibles
             self.available_orders.remove_by_id(order_id)
             # Guardar quién aceptó el pedido para tracking
-            if not hasattr(order, 'accepted_by'):
+            if not hasattr(order, "accepted_by"):
                 order.accepted_by = agent_type
             print(
                 f"Pedido {order_id} removido de la cola de disponibles y listo para aceptar ({agent_type})"
