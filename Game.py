@@ -526,7 +526,7 @@ class Game:
         print("No hay pedidos disponibles cerca para aceptar.")
 
     def _attempt_cpu_move(self, dx: int, dy: int):
-        """Intenta mover al agente CPU"""
+        """Intenta mover al agente CPU con consumo de resistencia"""
         if (
             not hasattr(self, "ai_manager")
             or not self.ai_manager
@@ -535,16 +535,30 @@ class Game:
             return
 
         agent = self.ai_manager.agent
+        
+        # Check if AI can move (has stamina)
+        if not agent.can_move():
+            return
+        
         current_x, current_y = agent.position
         new_x, new_y = current_x + dx, current_y + dy
 
         # Verificar si la nueva posición es caminable
         if self.city.is_walkable(new_x, new_y):
-            # Actualizar posición del agente
-            agent.position = (new_x, new_y)
-
-            # Verificar interacciones en la nueva posición
-            self._check_cpu_location_interactions()
+            surface_weight = self.city.get_surface_weight(new_x, new_y)
+            
+            # Move with stamina consumption (same as player)
+            success = agent.move_to(
+                (new_x, new_y),
+                climate_multiplier=self.weather_manager.get_speed_multiplier(),
+                surface_weight=surface_weight,
+                reputation_multiplier=1.0,
+                stamina_extra_cost=self.weather_manager.get_stamina_penalty_per_cell(),
+            )
+            
+            if success:
+                # Verificar interacciones en la nueva posición
+                self._check_cpu_location_interactions()
 
     def _check_cpu_location_interactions(self):
         """Verifica si el CPU debe recoger o entregar un pedido"""
@@ -587,11 +601,32 @@ class Game:
                     if delivered:
                         # Remover del inventario del agente
                         agent.inventory_ids.remove(oid)
-                        # Add earnings to AI agent
+                        
+                        # Update AI inventory weight
+                        if hasattr(agent, 'inventory_weight'):
+                            agent.inventory_weight = max(0, agent.inventory_weight - delivered.weight)
+                        
+                        # Calculate reputation change based on delivery timing
+                        delivery_time = delivered.delivery_time
+                        delay_seconds = delivered.calculate_delay(delivery_time)
+                        early = delivered.is_early_delivery(delivery_time)
+                        
+                        # Apply reputation change to AI
+                        if hasattr(agent, 'register_delivery_outcome'):
+                            rep_delta = agent.register_delivery_outcome(
+                                delay_seconds=delay_seconds,
+                                early=early,
+                            )
+                            if rep_delta != 0:
+                                print(f"[CPU] Reputación ajustada: {('+' if rep_delta>0 else '')}{rep_delta} → {agent.reputation}")
+                        
+                        # Add earnings to AI agent with reputation multiplier
                         if hasattr(agent, 'total_earnings'):
-                            agent.total_earnings += delivered.payout
+                            pay_mult = agent.get_pay_multiplier() if hasattr(agent, 'get_pay_multiplier') else 1.0
+                            payout = int(round(delivered.payout * pay_mult))
+                            agent.total_earnings += payout
                         print(
-                            f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}"
+                            f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${payout} (mult x{pay_mult:.2f})"
                         )
 
     def _cpu_accept_order(self, order):
@@ -620,6 +655,9 @@ class Game:
             accepted_order.state = OrderState.ACCEPTED
             # Agregar al inventario del agente
             agent.inventory_ids.append(accepted_order.id)
+            # Update AI inventory weight
+            if hasattr(agent, 'inventory_weight'):
+                agent.inventory_weight += accepted_order.weight
             print(
                 f"[CPU] Pedido {accepted_order.id} aceptado (estado: {accepted_order.state})"
             )
@@ -794,6 +832,12 @@ class Game:
                 recovery_rate = 2.0
                 self.player.recover_stamina(
                     recovery_rate=recovery_rate, delta_time=delta_time
+                )
+            
+            # AI stamina recovery (always recovering like player)
+            if hasattr(self, "ai_manager") and self.ai_manager and self.ai_manager.agent:
+                self.ai_manager.agent.recover_stamina(
+                    recovery_rate=2.0, delta_time=delta_time
                 )
 
             # Verificar condiciones de juego
@@ -1982,10 +2026,31 @@ class Game:
                         delivered = self.order_manager.deliver_order(order.id)
                         if delivered:
                             ai_agent.inventory_ids.remove(order.id)
-                            # Add earnings to AI agent
+                            
+                            # Update AI inventory weight
+                            if hasattr(ai_agent, 'inventory_weight'):
+                                ai_agent.inventory_weight = max(0, ai_agent.inventory_weight - delivered.weight)
+                            
+                            # Calculate reputation change based on delivery timing
+                            delivery_time = delivered.delivery_time
+                            delay_seconds = delivered.calculate_delay(delivery_time)
+                            early = delivered.is_early_delivery(delivery_time)
+                            
+                            # Apply reputation change to AI
+                            if hasattr(ai_agent, 'register_delivery_outcome'):
+                                rep_delta = ai_agent.register_delivery_outcome(
+                                    delay_seconds=delay_seconds,
+                                    early=early,
+                                )
+                                if rep_delta != 0:
+                                    print(f"[CPU] Reputación ajustada: {('+' if rep_delta>0 else '')}{rep_delta} → {ai_agent.reputation}")
+                            
+                            # Add earnings to AI agent with reputation multiplier
                             if hasattr(ai_agent, 'total_earnings'):
-                                ai_agent.total_earnings += delivered.payout
-                            print(f"[CPU] Pedido {order.id} entregado")
+                                pay_mult = ai_agent.get_pay_multiplier() if hasattr(ai_agent, 'get_pay_multiplier') else 1.0
+                                payout = int(round(delivered.payout * pay_mult))
+                                ai_agent.total_earnings += payout
+                            print(f"[CPU] Pedido {order.id} entregado. Pago ${payout}")
 
         except Exception as e:
             print(f"[CPU] Error en interacciones: {e}")

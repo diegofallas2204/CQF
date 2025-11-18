@@ -24,12 +24,111 @@ class AIPlayer:
         self.difficulty = difficulty
         self.position: Tuple[int, int] = (1, 1)
         self.stamina: float = 100.0
+        self.max_stamina: float = 100.0
         self.reputation: int = 70
         self.inventory_ids: List[str] = []
         self.max_weight: float = 10.0
         self.current_target_order_id: Optional[str] = None
         self.route: List[Tuple[int,int]] = []  # planned path (seq of positions)
         self.total_earnings: int = 0  # Track AI earnings
+        self.inventory_weight: float = 0.0  # Track weight for stamina calculations
+        self._on_time_streak: int = 0
+        self._first_late_discount_used: bool = False
+
+    # ----- Stamina management (same as Player) -----
+    def can_move(self) -> bool:
+        """Check if AI can move (has stamina)"""
+        return self.stamina > 0
+    
+    def consume_stamina(
+        self,
+        base_consumption: float = 0.5,
+        weight_penalty: float = 0.0,
+        climate_penalty: float = 0.0,
+    ):
+        """Consume stamina when moving"""
+        total = base_consumption + weight_penalty + climate_penalty
+        self.stamina = max(0, self.stamina - total)
+    
+    def recover_stamina(self, recovery_rate: float = 2.0, delta_time: float = 1.0):
+        """Recover stamina over time"""
+        if self.stamina < self.max_stamina:
+            self.stamina = min(
+                self.max_stamina, self.stamina + (recovery_rate * delta_time)
+            )
+    
+    def calculate_weight_penalty(self) -> float:
+        """Calculate stamina penalty based on carried weight"""
+        if self.inventory_weight > 3:
+            return 0.2 * (self.inventory_weight - 3)
+        return 0.0
+    
+    def move_to(
+        self,
+        new_position: Tuple[int, int],
+        climate_multiplier: float = 1.0,
+        surface_weight: float = 1.0,
+        reputation_multiplier: float = 1.0,
+        stamina_extra_cost: float = 0.0,
+    ) -> bool:
+        """Move AI to new position with stamina consumption"""
+        if not self.can_move():
+            return False
+        
+        weight_penalty = self.calculate_weight_penalty()
+        base_cost = 0.5
+        self.consume_stamina(
+            base_consumption=base_cost,
+            weight_penalty=weight_penalty,
+            climate_penalty=stamina_extra_cost,
+        )
+        
+        self.position = new_position
+        return True
+    
+    # ----- Reputation management (same as Player) -----
+    def apply_reputation_change(self, delta: int) -> int:
+        """Apply delta to reputation and clamp 0..100"""
+        prev = self.reputation
+        self.reputation = int(max(0, min(100, self.reputation + delta)))
+        return self.reputation - prev
+    
+    def get_pay_multiplier(self) -> float:
+        """+5% if reputation >= 90"""
+        return 1.05 if self.reputation >= 90 else 1.0
+    
+    def register_delivery_outcome(self, delay_seconds: float, early: bool) -> int:
+        """Adjust reputation based on delivery result"""
+        delta = 0
+        if early:
+            delta = +5
+            self._on_time_streak += 1
+        elif delay_seconds <= 0:
+            delta = +3
+            self._on_time_streak += 1
+        else:
+            # Late delivery - penalty based on threshold
+            if delay_seconds <= 30:
+                penalty = -2
+            elif delay_seconds <= 120:
+                penalty = -5
+            else:
+                penalty = -10
+            
+            # First late delivery with high reputation - half penalty
+            if self.reputation >= 85 and not self._first_late_discount_used:
+                penalty = int(penalty / 2)
+                self._first_late_discount_used = True
+            
+            delta = penalty
+            self._on_time_streak = 0
+        
+        # Bonus for streak of 3
+        if self._on_time_streak and self._on_time_streak % 3 == 0:
+            self.apply_reputation_change(+2)
+        
+        self.apply_reputation_change(delta)
+        return delta
 
     # ----- World / data input -----
     def update_world(self, city: Any, orders: Dict[str, Any], weather: Any):

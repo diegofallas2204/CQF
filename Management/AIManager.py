@@ -305,9 +305,24 @@ class AIManager:
                     try:
                         if order.id in self.agent.inventory_ids:
                             self.agent.inventory_ids.remove(order.id)
-                        # Add earnings to AI agent
+                        
+                        # Calculate reputation change based on delivery timing
+                        delivery_time = delivered.delivery_time
+                        delay_seconds = delivered.calculate_delay(delivery_time)
+                        early = delivered.is_early_delivery(delivery_time)
+                        
+                        # Apply reputation change to AI
+                        if hasattr(self.agent, 'register_delivery_outcome'):
+                            rep_delta = self.agent.register_delivery_outcome(
+                                delay_seconds=delay_seconds,
+                                early=early,
+                            )
+                        
+                        # Add earnings to AI agent with reputation multiplier
                         if hasattr(self.agent, 'total_earnings'):
-                            self.agent.total_earnings += delivered.payout
+                            pay_mult = self.agent.get_pay_multiplier() if hasattr(self.agent, 'get_pay_multiplier') else 1.0
+                            payout = int(round(delivered.payout * pay_mult))
+                            self.agent.total_earnings += payout
                     except Exception:
                         pass
                     return "delivered"
