@@ -30,7 +30,7 @@ class OrderManager:
         now_aware = datetime.now(timezone.utc)
 
         # Para conservar el escalonado entre pedidos, usamos un offset inicial base
-        # y sumamos 30s por índice (ajústalo si quieres que se separen más).
+        # y sumamos 30s por índice.
         base_offset = timedelta(minutes=10)
         step = timedelta(seconds=30)
 
@@ -70,7 +70,7 @@ class OrderManager:
             dropoff_valid = city.is_walkable(order.dropoff[0], order.dropoff[1])
 
             if not pickup_valid or not dropoff_valid:
-                print(f"⚠️ Pedido {order.id} tiene ubicación problemática:")
+                print(f"Pedido {order.id} tiene ubicación problemática:")
                 if not pickup_valid:
                     print(f"   Pickup {order.pickup} NO es caminable")
                 if not dropoff_valid:

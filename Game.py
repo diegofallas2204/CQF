@@ -647,7 +647,7 @@ class Game:
             invalid_count = self.order_manager.validate_order_locations(self.city)
             if invalid_count > 0:
                 print(
-                    f"⚠️ Se invalidaron {invalid_count} pedidos con ubicaciones bloqueadas"
+                    f"Se invalidaron {invalid_count} pedidos con ubicaciones bloqueadas"
                 )
 
         # 3. Actualizar pedidos disponibles DESPUÉS de validar

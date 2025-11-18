@@ -107,7 +107,7 @@ class Graph:
 
         # Verificar que hay al menos algunos nodos
         if len(self.adj) == 0:
-            print("[Graph] ⚠️ ADVERTENCIA: Grafo vacío!")
+            print("[Graph] ADVERTENCIA: Grafo vacío!")
             return False
 
         # Mostrar algunos nodos de ejemplo
