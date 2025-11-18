@@ -35,6 +35,7 @@ class AIManager:
 
         self.action_cooldown = 0.0
         self.last_decision_time = 0.0
+        self.last_movement_time = 0.0  # Track when AI last moved for stamina recovery
 
         # Referencias
         self._city = None
@@ -292,6 +293,24 @@ class AIManager:
                     try:
                         if order.id in self.agent.inventory_ids:
                             self.agent.inventory_ids.remove(order.id)
+                        
+                        # Calculate reputation change based on delivery timing
+                        delivery_time = delivered.delivery_time
+                        delay_seconds = delivered.calculate_delay(delivery_time)
+                        early = delivered.is_early_delivery(delivery_time)
+                        
+                        # Apply reputation change to AI
+                        if hasattr(self.agent, 'register_delivery_outcome'):
+                            rep_delta = self.agent.register_delivery_outcome(
+                                delay_seconds=delay_seconds,
+                                early=early,
+                            )
+                        
+                        # Add earnings to AI agent with reputation multiplier
+                        if hasattr(self.agent, 'total_earnings'):
+                            pay_mult = self.agent.get_pay_multiplier() if hasattr(self.agent, 'get_pay_multiplier') else 1.0
+                            payout = int(round(delivered.payout * pay_mult))
+                            self.agent.total_earnings += payout
                     except Exception:
                         pass
                     return "delivered"
@@ -400,6 +419,8 @@ class AIManager:
                 if hasattr(self.game, "_attempt_cpu_move"):
                     self.game._attempt_cpu_move(dx, dy)
                 self.action_cooldown = self.min_action_interval
+                # Track movement time for stamina recovery
+                self.last_movement_time = time.time()
                 try:
                     if self.agent and hasattr(self.agent, "position"):
                         self._recent_positions.append(tuple(self.agent.position))
@@ -779,6 +800,7 @@ class AIManager:
         self.last_tick = time.time()
         self.last_decision_time = 0.0
         self.action_cooldown = 0.0
+        self.last_movement_time = 0.0  # Initialize movement tracking for stamina recovery
         self._recent_positions = deque(maxlen=10)
         if self.agent and hasattr(self.agent, "position"):
             try:

@@ -515,7 +515,7 @@ class Game:
         print("No hay pedidos disponibles cerca para aceptar.")
 
     def _attempt_cpu_move(self, dx: int, dy: int):
-        """Intenta mover al agente CPU"""
+        """Intenta mover al agente CPU con consumo de resistencia"""
         if (
             not hasattr(self, "ai_manager")
             or not self.ai_manager
@@ -524,6 +524,11 @@ class Game:
             return
 
         agent = self.ai_manager.agent
+        
+        # Check if AI can move (has stamina)
+        if not agent.can_move():
+            return
+        
         current_x, current_y = agent.position
         new_x, new_y = current_x + dx, current_y + dy
 
@@ -575,7 +580,7 @@ class Game:
                         if self.ai_manager:
                             self.ai_manager.record_deliver(delivered)
                         print(
-                            f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}"
+                            f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${payout} (mult x{pay_mult:.2f})"
                         )
 
     def _cpu_accept_order(self, order):
@@ -786,6 +791,14 @@ class Game:
                 self.player.recover_stamina(
                     recovery_rate=recovery_rate, delta_time=delta_time
                 )
+            
+            # AI stamina recovery (only when not moving, same as player)
+            if hasattr(self, "ai_manager") and self.ai_manager and self.ai_manager.agent:
+                ai_time_since_movement = current_time - self.ai_manager.last_movement_time
+                if ai_time_since_movement > self.movement_cooldown:
+                    self.ai_manager.agent.recover_stamina(
+                        recovery_rate=2.0, delta_time=delta_time
+                    )
 
             self.check_game_conditions()
 
@@ -1378,6 +1391,158 @@ class Game:
                 size=18,
                 shadow=False,
             )
+        
+        # Render AI stats panel if AI is active (added separately, doesn't modify existing UI)
+        self._render_ai_stats_panel()
+
+    def _render_ai_stats_panel(self):
+        """Render AI opponent stats in a separate panel above the player panel"""
+        # Only render if AI is active
+        if not hasattr(self, "ai_manager") or not self.ai_manager:
+            return
+        if not hasattr(self.ai_manager, "agent") or not self.ai_manager.agent:
+            return
+        
+        agent = self.ai_manager.agent
+        
+        # Position AI panel above player panel
+        available_height = self.screen.get_height() - self.hud_reserved
+        ui_y_start = available_height + 8
+        
+        panel_x = 6
+        ai_panel_y = ui_y_start - 6 - 74  # 74 = 70 (panel height) + 4 (spacing)
+        panel_w = self.screen.get_width() - 12
+        panel_h = 70
+        
+        # Draw AI panel with different color
+        self._draw_panel(
+            panel_x,
+            ai_panel_y,
+            panel_w,
+            panel_h,
+            alpha=170,
+            radius=12,
+            color=(70, 25, 100),  # Purple for AI
+        )
+        
+        # Setup columns
+        panel_margin_x = 8
+        panel_margin_y = 6
+        col_w = panel_w // 4
+        col_x = [panel_x + panel_margin_x + col_w * i for i in range(4)]
+        row_y1 = ai_panel_y + panel_margin_y + 6
+        row_y2 = row_y1 + 20
+        
+        # Label
+        self._draw_text(
+            f"IA ({self.ai_manager.difficulty.upper()})",
+            col_x[0],
+            ai_panel_y + 2,
+            self.colors["CYAN"],
+            size=18,
+        )
+        
+        # Column 1: AI Stamina
+        self._draw_text(
+            f"Resistencia: {agent.stamina:.0f}",
+            col_x[0],
+            row_y1,
+            self.colors["WHITE"],
+            size=18,
+        )
+        # Stamina bar
+        bar_w, bar_h = 100, 8
+        bar_x, bar_y = col_x[0], row_y1 + 16
+        pygame.draw.rect(
+            self.screen,
+            self.colors["GRAY"],
+            (bar_x, bar_y, bar_w, bar_h),
+            border_radius=3,
+        )
+        stamina_ratio = max(0.0, min(1.0, agent.stamina / 100.0))
+        stamina_color = (
+            self.colors["CYAN"]
+            if stamina_ratio > 0.5
+            else self.colors["YELLOW"] if stamina_ratio > 0.2 else self.colors["RED"]
+        )
+        pygame.draw.rect(
+            self.screen,
+            stamina_color,
+            (bar_x, bar_y, int(bar_w * stamina_ratio), bar_h),
+            border_radius=3,
+        )
+        # Score
+        ai_earnings = getattr(agent, 'total_earnings', 0)
+        self._draw_text(
+            f"Puntos: ${ai_earnings}",
+            col_x[0],
+            row_y2,
+            self.colors["WHITE"],
+            size=18,
+        )
+        
+        # Column 2: AI Reputation and Inventory
+        ai_reputation = getattr(agent, 'reputation', 70)
+        self._draw_text(
+            f"Reputación: {ai_reputation}",
+            col_x[1],
+            row_y1,
+            self.colors["WHITE"],
+            size=18,
+        )
+        ai_inventory_count = len(getattr(agent, 'inventory_ids', []))
+        self._draw_text(
+            f"Inventario: {ai_inventory_count}",
+            col_x[1],
+            row_y2,
+            self.colors["WHITE"],
+            size=18,
+        )
+        
+        # Column 3: AI Current Order
+        if hasattr(agent, 'inventory_ids') and agent.inventory_ids:
+            ai_order_id = agent.inventory_ids[0]
+            ai_order = self.order_manager.all_orders.get(ai_order_id)
+            if ai_order:
+                self._draw_text(
+                    f"Pedido: {ai_order.id[:8]}",
+                    col_x[2],
+                    row_y1,
+                    self.colors["CYAN"],
+                    size=18,
+                )
+                self._draw_text(
+                    f"${ai_order.payout}",
+                    col_x[2],
+                    row_y2,
+                    self.colors["CYAN"],
+                    size=18,
+                )
+        else:
+            self._draw_text(
+                "Sin pedido",
+                col_x[2],
+                row_y1,
+                self.colors["GRAY"],
+                size=18,
+            )
+        
+        # Column 4: Goal
+        self._draw_text(
+            f"Meta: ${self.city.goal}",
+            col_x[3],
+            row_y1,
+            self.colors["WHITE"],
+            size=18,
+        )
+        stats = self.order_manager.get_statistics()
+        self._draw_text(
+            f"Disponibles: {stats['available']}",
+            col_x[3],
+            row_y2,
+            self.colors["WHITE"],
+            size=18,
+        )
 
     def _render_order_selection(self):
         """Renderiza menú de selección de pedidos"""
