@@ -29,6 +29,7 @@ class AIPlayer:
         self.max_weight: float = 10.0
         self.current_target_order_id: Optional[str] = None
         self.route: List[Tuple[int,int]] = []  # planned path (seq of positions)
+        self.total_earnings: int = 0  # Track AI earnings
 
     # ----- World / data input -----
     def update_world(self, city: Any, orders: Dict[str, Any], weather: Any):

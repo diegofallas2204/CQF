@@ -305,6 +305,9 @@ class AIManager:
                     try:
                         if order.id in self.agent.inventory_ids:
                             self.agent.inventory_ids.remove(order.id)
+                        # Add earnings to AI agent
+                        if hasattr(self.agent, 'total_earnings'):
+                            self.agent.total_earnings += delivered.payout
                     except Exception:
                         pass
                     return "delivered"

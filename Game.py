@@ -587,6 +587,9 @@ class Game:
                     if delivered:
                         # Remover del inventario del agente
                         agent.inventory_ids.remove(oid)
+                        # Add earnings to AI agent
+                        if hasattr(agent, 'total_earnings'):
+                            agent.total_earnings += delivered.payout
                         print(
                             f"[CPU] Pedido {order.id} entregado (dist={dist_to_dropoff}). Pago ${delivered.payout}"
                         )
@@ -1195,47 +1198,429 @@ class Game:
         panel_x = 6
         panel_y = ui_y_start - 6
         panel_w = self.screen.get_width() - 12
-        panel_h = 140  # altura del panel HUD
+        
+        # Check if AI is active to determine panel layout
+        has_ai = (hasattr(self, "ai_manager") and self.ai_manager 
+                  and hasattr(self.ai_manager, "agent") and self.ai_manager.agent)
+        
+        if has_ai:
+            # Two panels: one for player, one for AI
+            panel_h = 70  # altura de cada panel
+            ai_panel_y = panel_y
+            player_panel_y = panel_y + panel_h + 4
+        else:
+            # Single panel for player only
+            panel_h = 140  # altura del panel HUD
+            player_panel_y = panel_y
 
-        # Panel translúcido (contraste con el fondo/clima)
+        # Panel translúcido para jugador (contraste con el fondo/clima)
         self._draw_panel(
             panel_x,
-            panel_y,
+            player_panel_y,
             panel_w,
             panel_h,
             alpha=170,
             radius=12,
             color=(25, 70, 100),
         )
+        
+        # Panel translúcido para AI si está activo
+        if has_ai:
+            self._draw_panel(
+                panel_x,
+                ai_panel_y,
+                panel_w,
+                panel_h,
+                alpha=170,
+                radius=12,
+                color=(70, 25, 100),  # Different color for AI
+            )
 
+        # Render AI stats if AI is active
+        if has_ai:
+            self._render_ai_stats_panel(panel_x, ai_panel_y, panel_w, panel_h, panel_margin_x, panel_margin_y)
+        
+        # Columnas (4) for player panel
+        col_w = panel_w // 4
+        col_x = [panel_x + panel_margin_x + col_w * i for i in range(4)]
+        
+        if has_ai:
+            # Compact layout with AI panel
+            row_y1 = player_panel_y + panel_margin_y + 6
+            row_y2 = row_y1 + 20
+            row_y3 = row_y2 + 20
+        else:
+            # Original layout without AI panel
+            row_y1 = player_panel_y + panel_margin_y + 6
+            row_y2 = row_y1 + 22
+            row_y3 = row_y2 + 22
+            row_y4 = row_y3 + 22  # fila extra
+
+        # ------ Columna 1: Player ------
+        self._draw_text(
+            "JUGADOR",
+            col_x[0],
+            player_panel_y + 2,
+            self.colors["YELLOW"],
+            size=18,
+        )
+        if has_ai:
+            # Compact display with stamina bar
+            self._draw_text(
+                f"Resistencia: {self.player.stamina:.0f}",
+                col_x[0],
+                row_y1,
+                self.colors["WHITE"],
+                size=18,
+            )
+            # Barra de resistencia compacta
+            bar_w, bar_h = 100, 8
+            bar_x, bar_y = col_x[0], row_y1 + 16
+            pygame.draw.rect(
+                self.screen,
+                self.colors["GRAY"],
+                (bar_x, bar_y, bar_w, bar_h),
+                border_radius=3,
+            )
+            stamina_ratio = max(0.0, min(1.0, self.player.stamina / 100.0))
+            stamina_color = (
+                self.colors["GREEN"]
+                if stamina_ratio > 0.5
+                else self.colors["YELLOW"] if stamina_ratio > 0.2 else self.colors["RED"]
+            )
+            pygame.draw.rect(
+                self.screen,
+                stamina_color,
+                (bar_x, bar_y, int(bar_w * stamina_ratio), bar_h),
+                border_radius=3,
+            )
+            # Puntuación
+            self._draw_text(
+                f"Puntos: ${self.player.total_earnings}",
+                col_x[0],
+                row_y2,
+                self.colors["WHITE"],
+                size=18,
+            )
+        else:
+            # Original detailed display
+            self._draw_text(
+                f"Resistencia: {self.player.stamina:.0f}/100",
+                col_x[0],
+                row_y1,
+                self.colors["WHITE"],
+                size=22,
+            )
+            # Barra de resistencia
+            bar_w, bar_h = 140, 10
+            bar_x, bar_y = col_x[0], row_y1 + 18
+            pygame.draw.rect(
+                self.screen,
+                self.colors["GRAY"],
+                (bar_x, bar_y, bar_w, bar_h),
+                border_radius=4,
+            )
+            stamina_ratio = max(0.0, min(1.0, self.player.stamina / 100.0))
+            stamina_color = (
+                self.colors["GREEN"]
+                if stamina_ratio > 0.5
+                else self.colors["YELLOW"] if stamina_ratio > 0.2 else self.colors["RED"]
+            )
+            pygame.draw.rect(
+                self.screen,
+                stamina_color,
+                (bar_x, bar_y, int(bar_w * stamina_ratio), bar_h),
+                border_radius=4,
+            )
+
+            # Reputación y multiplicador (bajadas 10 px para no chocar con la barra)
+            self._draw_text(
+                f"Reputación: {self.player.reputation}/100",
+                col_x[0],
+                row_y2 + 10,
+                self.colors["WHITE"],
+                size=20,
+            )
+            self._draw_text(
+                f"Pago x{self.player.get_pay_multiplier():.2f}",
+                col_x[0],
+                row_y3 + 10,
+                self.colors["YELLOW"],
+                size=20,
+            )
+
+        # ------ Columna 2: Inventario / Reputación ------
+        if has_ai:
+            self._draw_text(
+                f"Reputación: {self.player.reputation}",
+                col_x[1],
+                row_y1,
+                self.colors["WHITE"],
+                size=18,
+            )
+            self._draw_text(
+                f"Inventario: {self.inventory.get_count()}",
+                col_x[1],
+                row_y2,
+                self.colors["WHITE"],
+                size=18,
+            )
+        else:
+            self._draw_text(
+                f"Inventario: {self.inventory.get_count()}",
+                col_x[1],
+                row_y1,
+                self.colors["WHITE"],
+                size=22,
+            )
+            self._draw_text(
+                f"Peso: {self.inventory.current_weight:.1f}kg",
+                col_x[1],
+                row_y2,
+                self.colors["WHITE"],
+                size=20,
+            )
+
+            # Sistema de deshacer / stats
+            undo_count = self.state_manager.get_undo_count()
+            self._draw_text(
+                f"Deshacer: {undo_count}", col_x[1], row_y3, self.colors["CYAN"], size=20
+            )
+
+        # ------ Columna 3: Pedido actual ------
+        current_order = self.inventory.get_current_order()
+        if has_ai:
+            if current_order:
+                self._draw_text(
+                    f"Pedido: {current_order.id[:8]}",
+                    col_x[2],
+                    row_y1,
+                    self.colors["YELLOW"],
+                    size=18,
+                )
+                self._draw_text(
+                    f"${current_order.payout}",
+                    col_x[2],
+                    row_y2,
+                    self.colors["YELLOW"],
+                    size=18,
+                )
+            else:
+                self._draw_text(
+                    "Sin pedido",
+                    col_x[2],
+                    row_y1,
+                    self.colors["GRAY"],
+                    size=18,
+                )
+        else:
+            if current_order:
+                color = (
+                    self.colors["YELLOW"]
+                    if current_order.state == OrderState.ACCEPTED
+                    else (
+                        self.colors["GREEN"]
+                        if current_order.state == OrderState.PICKED_UP
+                        else self.colors["WHITE"]
+                    )
+                )
+                self._draw_text(
+                    f"Actual: {current_order.id}", col_x[2], row_y1, color, size=22
+                )
+                self._draw_text(
+                    f"${current_order.payout}", col_x[2], row_y2, color, size=20
+                )
+
+            # Recuperación si está quieto
+            current_time = time.time()
+            if current_time - self.last_movement_time > self.movement_cooldown:
+                self._draw_text(
+                    "Recuperando +2/s", col_x[2], row_y3, self.colors["PURPLE"], size=20
+                )
+
+        # ------ Columna 4: Tiempo / clima ------
+        if has_ai:
+            time_left = max(0, self.game_duration - self.current_time)
+            minutes = int(time_left // 60)
+            seconds = int(time_left % 60)
+            self._draw_text(
+                f"Tiempo: {minutes:02d}:{seconds:02d}",
+                col_x[3],
+                row_y1,
+                self.colors["WHITE"],
+                size=18,
+            )
+            cond, inten, in_trans = self.weather_manager.get_ui_tuple()
+            wx = f"{cond[:8]}" + (" *" if in_trans else "")
+            self._draw_text(wx, col_x[3], row_y2, self.colors["WHITE"], size=18)
+        else:
+            time_left = max(0, self.game_duration - self.current_time)
+            minutes = int(time_left // 60)
+            seconds = int(time_left % 60)
+            self._draw_text(
+                f"Tiempo: {minutes:02d}:{seconds:02d}",
+                col_x[3],
+                row_y1,
+                self.colors["WHITE"],
+                size=22,
+            )
+            self._draw_text(
+                f"${self.player.total_earnings}/${self.city.goal}",
+                col_x[3],
+                row_y2,
+                self.colors["WHITE"],
+                size=20,
+            )
+
+            cond, inten, in_trans = self.weather_manager.get_ui_tuple()
+            wx = f"Clima: {cond} ({inten:.2f})" + (" *" if in_trans else "")
+            self._draw_text(wx, col_x[3], row_y3, self.colors["WHITE"], size=20)
+
+        # Only show detailed stats in non-AI mode
+        if not has_ai:
+            # ---------- Punto 9: Preview de score en vivo (columna derecha, bajo clima) ----------
+            stats = self.order_manager.get_statistics()
+            rep_mult = (
+                self.player.get_pay_multiplier()
+                if hasattr(self.player, "get_pay_multiplier")
+                else 1.0
+            )
+            base_now = int(self.player.total_earnings * rep_mult)
+            time_bonus_now = int(
+                self.score_calculator.calculate_time_bonus(
+                    self.current_time, self.game_duration
+                )
+            )
+            penalties_now = (
+                stats.get("cancelled", 0) * 50
+                + stats.get("expired", 0) * 100
+                + self.late_deliveries * 25
+            )
+            final_now = max(0, base_now + time_bonus_now - penalties_now)
+
+            preview_x = col_x[3]
+            preview_y = row_y4  # usa la fila extra para evitar choques
+            self._draw_text(
+                f"Score (ahora): {final_now}",
+                preview_x,
+                preview_y,
+                self.colors["YELLOW"],
+                size=20,
+            )
+            self._draw_text(
+                f"base={base_now}  bonus={time_bonus_now}  -{penalties_now}",
+                preview_x,
+                preview_y + 18,
+                self.colors["WHITE"],
+                size=16,
+            )
+
+            # ------ Fila extra izquierda: stats compactos ------
+            self._draw_text(
+                f"Disponibles:{stats['available']}  Completados:{stats['completed']}",
+                panel_x + 12,
+                row_y4,
+                self.colors["WHITE"],
+                size=18,
+            )
+
+            # ------ Controles (dos líneas si hace falta) ------
+            controls = "ESPACIO = Pedidos  |  I = Ordenar  |  U = Deshacer  |  N/P = Navegar  |  C = Cancelar  |  ESC = Pausa  |  E = Aceptar/Recoger  |  F5 = Guardar Partida  |  F9 = Cargar Partida"
+            max_width = panel_w - 24
+            font = pygame.font.Font(None, 18)
+            words = controls.split()
+            lines, line = [], ""
+            for w in words:
+                test = (line + " " + w).strip()
+                if font.size(test)[0] <= max_width:
+                    line = test
+                else:
+                    lines.append(line)
+                    line = w
+            if line:
+                lines.append(line)
+
+            controls_y = player_panel_y + panel_h - 18
+            if len(lines) == 1:
+                self._draw_text(
+                    lines[0],
+                    panel_x + 12,
+                    controls_y,
+                    self.colors["BLACK"],
+                    size=18,
+                    shadow=False,
+                )
+            else:
+                self._draw_text(
+                    lines[0],
+                    panel_x + 12,
+                    controls_y - 16,
+                    self.colors["BLACK"],
+                    size=18,
+                    shadow=False,
+                )
+                self._draw_text(
+                    lines[1],
+                    panel_x + 12,
+                    controls_y,
+                    self.colors["BLACK"],
+                    size=18,
+                    shadow=False,
+                )
+        else:
+            # Compact controls for AI mode
+            controls_y = player_panel_y + panel_h - 16
+            self._draw_text(
+                "ESPACIO=Pedidos | I=Ordenar | U=Deshacer | C=Cancelar | ESC=Pausa | E=Aceptar",
+                panel_x + 12,
+                controls_y,
+                self.colors["BLACK"],
+                size=16,
+                shadow=False,
+            )
+
+    def _render_ai_stats_panel(self, panel_x, panel_y, panel_w, panel_h, panel_margin_x, panel_margin_y):
+        """Render AI opponent stats panel"""
+        if not hasattr(self, "ai_manager") or not self.ai_manager or not self.ai_manager.agent:
+            return
+        
+        agent = self.ai_manager.agent
+        
         # Columnas (4)
         col_w = panel_w // 4
         col_x = [panel_x + panel_margin_x + col_w * i for i in range(4)]
         row_y1 = panel_y + panel_margin_y + 6
-        row_y2 = row_y1 + 22
-        row_y3 = row_y2 + 22
-        row_y4 = row_y3 + 22  # fila extra
-
-        # ------ Columna 1: Player ------
+        row_y2 = row_y1 + 20
+        
+        # Label
         self._draw_text(
-            f"Resistencia: {self.player.stamina:.0f}/100",
+            f"IA ({self.ai_manager.difficulty.upper()})",
+            col_x[0],
+            panel_y + 2,
+            self.colors["CYAN"],
+            size=18,
+        )
+        
+        # ------ Columna 1: AI Stamina ------
+        self._draw_text(
+            f"Resistencia: {agent.stamina:.0f}",
             col_x[0],
             row_y1,
             self.colors["WHITE"],
-            size=22,
+            size=18,
         )
-        # Barra de resistencia
-        bar_w, bar_h = 140, 10
-        bar_x, bar_y = col_x[0], row_y1 + 18
+        # Barra de resistencia AI
+        bar_w, bar_h = 100, 8
+        bar_x, bar_y = col_x[0], row_y1 + 16
         pygame.draw.rect(
             self.screen,
             self.colors["GRAY"],
             (bar_x, bar_y, bar_w, bar_h),
-            border_radius=4,
+            border_radius=3,
         )
-        stamina_ratio = max(0.0, min(1.0, self.player.stamina / 100.0))
+        stamina_ratio = max(0.0, min(1.0, agent.stamina / 100.0))
         stamina_color = (
-            self.colors["GREEN"]
+            self.colors["CYAN"]
             if stamina_ratio > 0.5
             else self.colors["YELLOW"] if stamina_ratio > 0.2 else self.colors["RED"]
         )
@@ -1243,185 +1628,81 @@ class Game:
             self.screen,
             stamina_color,
             (bar_x, bar_y, int(bar_w * stamina_ratio), bar_h),
-            border_radius=4,
+            border_radius=3,
         )
-
-        # Reputación y multiplicador (bajadas 10 px para no chocar con la barra)
+        # Puntuación AI
+        ai_earnings = getattr(agent, 'total_earnings', 0)
         self._draw_text(
-            f"Reputación: {self.player.reputation}/100",
+            f"Puntos: ${ai_earnings}",
             col_x[0],
-            row_y2 + 10,
-            self.colors["WHITE"],
-            size=20,
-        )
-        self._draw_text(
-            f"Pago x{self.player.get_pay_multiplier():.2f}",
-            col_x[0],
-            row_y3 + 10,
-            self.colors["YELLOW"],
-            size=20,
-        )
-
-        # ------ Columna 2: Inventario ------
-        self._draw_text(
-            f"Inventario: {self.inventory.get_count()}",
-            col_x[1],
-            row_y1,
-            self.colors["WHITE"],
-            size=22,
-        )
-        self._draw_text(
-            f"Peso: {self.inventory.current_weight:.1f}kg",
-            col_x[1],
             row_y2,
-            self.colors["WHITE"],
-            size=20,
-        )
-
-        # Sistema de deshacer / stats
-        undo_count = self.state_manager.get_undo_count()
-        self._draw_text(
-            f"Deshacer: {undo_count}", col_x[1], row_y3, self.colors["CYAN"], size=20
-        )
-
-        # ------ Columna 3: Pedido actual / recuperación ------
-        current_order = self.inventory.get_current_order()
-        if current_order:
-            color = (
-                self.colors["YELLOW"]
-                if current_order.state == OrderState.ACCEPTED
-                else (
-                    self.colors["GREEN"]
-                    if current_order.state == OrderState.PICKED_UP
-                    else self.colors["WHITE"]
-                )
-            )
-            self._draw_text(
-                f"Actual: {current_order.id}", col_x[2], row_y1, color, size=22
-            )
-            self._draw_text(
-                f"${current_order.payout}", col_x[2], row_y2, color, size=20
-            )
-
-        # Recuperación si está quieto
-        current_time = time.time()
-        if current_time - self.last_movement_time > self.movement_cooldown:
-            self._draw_text(
-                "Recuperando +2/s", col_x[2], row_y3, self.colors["PURPLE"], size=20
-            )
-
-        # ------ Columna 4: Tiempo / ingresos / clima ------
-        time_left = max(0, self.game_duration - self.current_time)
-        minutes = int(time_left // 60)
-        seconds = int(time_left % 60)
-        self._draw_text(
-            f"Tiempo: {minutes:02d}:{seconds:02d}",
-            col_x[3],
-            row_y1,
-            self.colors["WHITE"],
-            size=22,
-        )
-        self._draw_text(
-            f"${self.player.total_earnings}/${self.city.goal}",
-            col_x[3],
-            row_y2,
-            self.colors["WHITE"],
-            size=20,
-        )
-
-        cond, inten, in_trans = self.weather_manager.get_ui_tuple()
-        wx = f"Clima: {cond} ({inten:.2f})" + (" *" if in_trans else "")
-        self._draw_text(wx, col_x[3], row_y3, self.colors["WHITE"], size=20)
-
-        # ---------- Punto 9: Preview de score en vivo (columna derecha, bajo clima) ----------
-        stats = self.order_manager.get_statistics()
-        rep_mult = (
-            self.player.get_pay_multiplier()
-            if hasattr(self.player, "get_pay_multiplier")
-            else 1.0
-        )
-        base_now = int(self.player.total_earnings * rep_mult)
-        time_bonus_now = int(
-            self.score_calculator.calculate_time_bonus(
-                self.current_time, self.game_duration
-            )
-        )
-        penalties_now = (
-            stats.get("cancelled", 0) * 50
-            + stats.get("expired", 0) * 100
-            + self.late_deliveries * 25
-        )
-        final_now = max(0, base_now + time_bonus_now - penalties_now)
-
-        preview_x = col_x[3]
-        preview_y = row_y4  # usa la fila extra para evitar choques
-        self._draw_text(
-            f"Score (ahora): {final_now}",
-            preview_x,
-            preview_y,
-            self.colors["YELLOW"],
-            size=20,
-        )
-        self._draw_text(
-            f"base={base_now}  bonus={time_bonus_now}  -{penalties_now}",
-            preview_x,
-            preview_y + 18,
-            self.colors["WHITE"],
-            size=16,
-        )
-
-        # ------ Fila extra izquierda: stats compactos ------
-        self._draw_text(
-            f"Disponibles:{stats['available']}  Completados:{stats['completed']}",
-            panel_x + 12,
-            row_y4,
             self.colors["WHITE"],
             size=18,
         )
-
-        # ------ Controles (dos líneas si hace falta) ------
-        controls = "ESPACIO = Pedidos  |  I = Ordenar  |  U = Deshacer  |  N/P = Navegar  |  C = Cancelar  |  ESC = Pausa  |  E = Aceptar/Recoger  |  F5 = Guardar Partida  |  F9 = Cargar Partida"
-        max_width = panel_w - 24
-        font = pygame.font.Font(None, 18)
-        words = controls.split()
-        lines, line = [], ""
-        for w in words:
-            test = (line + " " + w).strip()
-            if font.size(test)[0] <= max_width:
-                line = test
-            else:
-                lines.append(line)
-                line = w
-        if line:
-            lines.append(line)
-
-        controls_y = panel_y + panel_h - 18
-        if len(lines) == 1:
-            self._draw_text(
-                lines[0],
-                panel_x + 12,
-                controls_y,
-                self.colors["BLACK"],
-                size=18,
-                shadow=False,
-            )
+        
+        # ------ Columna 2: AI Reputación e Inventario ------
+        ai_reputation = getattr(agent, 'reputation', 70)
+        self._draw_text(
+            f"Reputación: {ai_reputation}",
+            col_x[1],
+            row_y1,
+            self.colors["WHITE"],
+            size=18,
+        )
+        ai_inventory_count = len(getattr(agent, 'inventory_ids', []))
+        self._draw_text(
+            f"Inventario: {ai_inventory_count}",
+            col_x[1],
+            row_y2,
+            self.colors["WHITE"],
+            size=18,
+        )
+        
+        # ------ Columna 3: AI Pedido actual ------
+        if agent.inventory_ids:
+            ai_order_id = agent.inventory_ids[0]
+            ai_order = self.order_manager.all_orders.get(ai_order_id)
+            if ai_order:
+                self._draw_text(
+                    f"Pedido: {ai_order.id[:8]}",
+                    col_x[2],
+                    row_y1,
+                    self.colors["CYAN"],
+                    size=18,
+                )
+                self._draw_text(
+                    f"${ai_order.payout}",
+                    col_x[2],
+                    row_y2,
+                    self.colors["CYAN"],
+                    size=18,
+                )
         else:
             self._draw_text(
-                lines[0],
-                panel_x + 12,
-                controls_y - 16,
-                self.colors["BLACK"],
+                "Sin pedido",
+                col_x[2],
+                row_y1,
+                self.colors["GRAY"],
                 size=18,
-                shadow=False,
             )
-            self._draw_text(
-                lines[1],
-                panel_x + 12,
-                controls_y,
-                self.colors["BLACK"],
-                size=18,
-                shadow=False,
-            )
+        
+        # ------ Columna 4: Meta ------
+        self._draw_text(
+            f"Meta: ${self.city.goal}",
+            col_x[3],
+            row_y1,
+            self.colors["WHITE"],
+            size=18,
+        )
+        # Stats comparison
+        stats = self.order_manager.get_statistics()
+        self._draw_text(
+            f"Disponibles: {stats['available']}",
+            col_x[3],
+            row_y2,
+            self.colors["WHITE"],
+            size=18,
+        )
 
     def _render_order_selection(self):
         """Renderiza menú de selección de pedidos"""
@@ -1827,6 +2108,9 @@ class Game:
                         delivered = self.order_manager.deliver_order(order.id)
                         if delivered:
                             ai_agent.inventory_ids.remove(order.id)
+                            # Add earnings to AI agent
+                            if hasattr(ai_agent, 'total_earnings'):
+                                ai_agent.total_earnings += delivered.payout
                             print(f"[CPU] Pedido {order.id} entregado")
 
         except Exception as e:
