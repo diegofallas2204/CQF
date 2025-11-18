@@ -37,12 +37,12 @@ class AIManager:
         self.last_decision_time = 0.0
         self.last_movement_time = 0.0  # Track when AI last moved for stamina recovery
 
-        # Referencias al juego (setear con register_game_refs / attach_game)
+        # Referencias
         self._city = None
         self._order_mgr = None
         self._weather_mgr = None
         self._game = None
-        self.game = None  # alias
+        self.game = None
 
         # Anti‑oscilación (Medium/Hard)
         self._recent_positions = deque(maxlen=10)
@@ -53,11 +53,20 @@ class AIManager:
         # Planificación secundaria (Hard)
         self._hard_next_planned = None
 
+        # ===== Estadísticas IA =====
+        self.stats = {
+            "accepted": 0,
+            "picked_up": 0,
+            "delivered": 0,
+            "expired": 0,
+            "cancelled": 0,
+            "total_payout": 0,
+        }
+
     # -----------------------
     # Creación del agente
     # -----------------------
     def _create_agent(self, diff: str):
-        """Crea instancia de AIPlayer concreta según la dificultad."""
         if diff == "easy":
             from Entities.AIPlayer import RandomAI
 
@@ -78,37 +87,55 @@ class AIManager:
     # Integración con Game
     # -----------------------
     def register_game_refs(self, city: Any, order_manager: Any, weather_manager: Any):
-        """Registra referencias para que la IA consulte el mundo."""
         self._city = city
         self._order_mgr = order_manager
         self._weather_mgr = weather_manager
-        # mantener nombres legacy
         self.city = city
         self.order_manager = order_manager
         self.weather_manager = weather_manager
 
     def attach_game(self, game):
-        """Adjunta la referencia a Game para invocar movimientos/aceptaciones."""
         self.game = game
         self._game = game
+
+    # -----------------------
+    # Estadísticas IA (helpers)
+    # -----------------------
+    def record_accept(self, order):
+        self.stats["accepted"] += 1
+
+    def record_pickup(self, order):
+        self.stats["picked_up"] += 1
+
+    def record_deliver(self, order):
+        self.stats["delivered"] += 1
+        try:
+            self.stats["total_payout"] += int(order.payout)
+        except Exception:
+            pass
+
+    def record_expire(self, order):
+        self.stats["expired"] += 1
+
+    def record_cancel(self, order):
+        self.stats["cancelled"] += 1
+
+    def get_statistics(self) -> dict:
+        return dict(self.stats)
 
     # -----------------------
     # Tick principal
     # -----------------------
     def tick(self, delta_time: float):
-        """Llamado cada frame; gestiona throttling y decide acción según dificultad."""
         if not self.agent or not self._city or not self._order_mgr:
             return
-
         if self.action_cooldown > 0:
             self.action_cooldown -= delta_time
             return
-
         now = time.time()
         if now - self.last_decision_time < self.decision_interval:
             return
         self.last_decision_time = now
-
         try:
             if self.difficulty == "easy":
                 self._easy_behavior()
@@ -147,24 +174,16 @@ class AIManager:
     def _nearest_adjacent_walkable(
         self, target: Tuple[int, int]
     ) -> Optional[Tuple[int, int]]:
-        """
-        Si target es caminable devuelve target, sino devuelve la casilla caminable
-        adyacente más cercana al agente (4-direcciones). Si no hay candidatas,
-        devuelve None.
-        """
         tx, ty = int(target[0]), int(target[1])
         if self._city.is_walkable(tx, ty):
             return (tx, ty)
-
         candidates: List[Tuple[int, int]] = []
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             nx, ny = tx + dx, ty + dy
             if self._city.is_walkable(nx, ny):
                 candidates.append((nx, ny))
-
         if not candidates:
             return None
-
         pos = self.agent.position
         candidates.sort(key=lambda p: self._manhattan(pos, p))
         return candidates[0]
@@ -172,21 +191,15 @@ class AIManager:
     def _local_bfs_next_step(
         self, target: Tuple[int, int], max_search: int = 64
     ) -> Optional[Tuple[int, int]]:
-        """
-        Búsqueda BFS local limitada que intenta hallar un primer paso hacia target.
-        Retorna la primera casilla del path (siguiente paso) o None.
-        """
         from collections import deque as _deque
 
         start = tuple(self.agent.position)
         goal = tuple(target)
         if start == goal:
             return None
-
         q = _deque([start])
         came_from = {start: None}
         nodes_explored = 0
-
         while q and nodes_explored < max_search:
             cur = q.popleft()
             nodes_explored += 1
@@ -211,8 +224,6 @@ class AIManager:
                     path.reverse()
                     return path[0] if path else None
                 q.append(neighbor)
-
-        # si no alcanzamos goal, intentar cualquier adyacente del goal que esté en came_from
         for adj in (
             (goal[0] + 1, goal[1]),
             (goal[0] - 1, goal[1]),
@@ -229,27 +240,16 @@ class AIManager:
                     node = came_from.get(node)
                 path.reverse()
                 return path[0] if path else None
-
         return None
 
     def _try_move(self, dx: int, dy: int) -> bool:
-        """
-        Intenta realizar un movimiento (dx,dy). Evita moverse a posiciones presentes
-        en _recent_positions si existe al menos una alternativa válida no reciente.
-        Retorna True si el movimiento se ejecutó.
-        """
         if not self._city:
             return False
-
         cur_x, cur_y = self.agent.position
         nx, ny = cur_x + dx, cur_y + dy
-
         if not self._city.is_walkable(nx, ny):
             return False
-
         new_pos = (nx, ny)
-
-        # Evitar oscilación sólo para Medium/Hard (Easy no usa este filtro)
         if self.difficulty in ("medium", "hard"):
             if new_pos in self._recent_positions:
                 alt_exists = False
@@ -265,44 +265,31 @@ class AIManager:
                         break
                 if alt_exists:
                     return False
-
         self._execute_action("move", dx, dy)
         return True
 
-    # ---- Interacciones CPU (pickup/delivery) sin necesidad de moverse ----
     def _cpu_try_interaction(self) -> Optional[str]:
-        """
-        Si el agente está adyacente a su objetivo actual (pickup/dropoff) intenta
-        explícitamente realizar la interacción con OrderManager (sin depender
-        de un movimiento para que Game lo detecte).
-        Retorna "picked", "delivered" o None.
-        """
         try:
             from State.OrderState import OrderState
         except Exception:
             OrderState = None
-
         if not self.agent or not getattr(self.agent, "inventory_ids", None):
             return None
-
         oid = self.agent.inventory_ids[0]
         order = self._order_mgr.all_orders.get(oid)
         if not order:
             return None
-
         pos = self.agent.position
-
-        # Pickup desde adyacencia
         if OrderState and order.state == OrderState.ACCEPTED:
             if self._is_adjacent_or_same(pos, tuple(order.pickup)):
                 if self._order_mgr.pickup_order(order.id):
+                    self.record_pickup(order)
                     return "picked"
-
-        # Delivery desde adyacencia
         if OrderState and order.state == OrderState.PICKED_UP:
             if self._is_adjacent_or_same(pos, tuple(order.dropoff)):
                 delivered = self._order_mgr.deliver_order(order.id)
                 if delivered:
+                    self.record_deliver(delivered)
                     try:
                         if order.id in self.agent.inventory_ids:
                             self.agent.inventory_ids.remove(order.id)
@@ -327,14 +314,12 @@ class AIManager:
                     except Exception:
                         pass
                     return "delivered"
-
         return None
 
     # ======================
     # Movimiento Fácil (random)
     # ======================
     def _random_step(self):
-        """Paso completamente aleatorio a un vecino caminable (o no moverse si no hay)."""
         x, y = self.agent.position
         neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
         walkables = [
@@ -348,12 +333,6 @@ class AIManager:
     def _random_neighbor_step_towards(
         self, target: Optional[Tuple[int, int]], toward_prob: float = 0.3
     ):
-        """
-        Paso aleatorio con leve sesgo hacia target:
-        - Con prob toward_prob, elige al azar entre vecinos que reduzcan la distancia a target.
-        - Con prob (1 - toward_prob), elige un vecino completamente aleatorio.
-        Si target es None, se comporta como _random_step.
-        """
         x, y = self.agent.position
         neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
         walkables = [
@@ -365,7 +344,6 @@ class AIManager:
             nx, ny = random.choice(walkables)
             self._execute_action("move", nx - x, ny - y)
             return
-        # preferir vecinos que acerquen al objetivo
         tx, ty = target
         current_d = self._manhattan((x, y), (tx, ty))
         better = [
@@ -373,40 +351,29 @@ class AIManager:
             for (nx, ny) in walkables
             if self._manhattan((nx, ny), (tx, ty)) < current_d
         ]
-        if better:
-            nx, ny = random.choice(better)
-        else:
-            nx, ny = random.choice(walkables)
+        nx, ny = random.choice(better if better else walkables)
         self._execute_action("move", nx - x, ny - y)
 
     # ======================
     # Movimiento Medium/Hard (dirigido con evasión)
     # ======================
     def _move_towards_target(self, target: Tuple[int, int]) -> bool:
-        """
-        Mueve hacia target con avoidance (Medium/Hard). Retorna True si se movió.
-        """
         if not self._city:
             return False
-
         cur_x, cur_y = self.agent.position
         adj = self._nearest_adjacent_walkable(target)
         if adj is None:
             return False
         tx, ty = adj
-
         dx_pref = 0 if tx == cur_x else (1 if tx > cur_x else -1)
         dy_pref = 0 if ty == cur_y else (1 if ty > cur_y else -1)
-
         if abs(tx - cur_x) >= abs(ty - cur_y):
             primary = (dx_pref, 0)
             secondary = (0, dy_pref)
         else:
             primary = (0, dy_pref)
             secondary = (dx_pref, 0)
-
-        for step in (primary, secondary):
-            dx, dy = step
+        for dx, dy in (primary, secondary):
             if dx == 0 and dy == 0:
                 continue
             nx, ny = cur_x + dx, cur_y + dy
@@ -414,7 +381,6 @@ class AIManager:
                 if self._try_move(dx, dy):
                     return True
             else:
-                # Casilla preferida bloqueada: probar adyacentes ordenados por cercanía al objetivo
                 candidates: List[Tuple[Tuple[int, int], int]] = []
                 for ax, ay in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     cx, cy = nx + ax, ny + ay
@@ -428,7 +394,6 @@ class AIManager:
                     if abs(mdx) <= 1 and abs(mdy) <= 1 and (mdx != 0 or mdy != 0):
                         if self._try_move(mdx, mdy):
                             return True
-
         bfs_step = self._local_bfs_next_step((tx, ty), max_search=64)
         if bfs_step:
             nx, ny = bfs_step
@@ -437,25 +402,17 @@ class AIManager:
             if abs(dx) <= 1 and abs(dy) <= 1 and (dx != 0 or dy != 0):
                 if self._try_move(dx, dy):
                     return True
-
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             if self._try_move(dx, dy):
                 return True
-
         return False
 
     # -----------------------
-    # Ejecutar acciones (move / accept)
+    # Ejecutar acciones
     # -----------------------
     def _execute_action(self, action_type: str, *args):
-        """
-        Ejecuta la acción usando Game y actualiza cooldown y el buffer de posiciones.
-        action_type: "move" -> args = (dx, dy)
-                     "accept_order" -> args = (order,)
-        """
         if not hasattr(self, "game") or not self.game:
             return
-
         try:
             if action_type == "move":
                 dx, dy = args[0], args[1]
@@ -469,15 +426,15 @@ class AIManager:
                         self._recent_positions.append(tuple(self.agent.position))
                 except Exception:
                     pass
-
             elif action_type == "accept_order":
                 order = args[0]
                 if hasattr(self.game, "_cpu_accept_order"):
                     self.game._cpu_accept_order(order)
+                # Registrar aceptación
+                self.record_accept(order)
                 self.action_cooldown = self.min_action_interval * 2
                 if hasattr(self, "agent") and self.agent:
                     self.agent.route = []
-
         except Exception as e:
             print(f"[AIManager] Error ejecutando acción {action_type}: {e}")
 
@@ -492,17 +449,8 @@ class AIManager:
     # Behaviors: easy / medium / hard
     # -----------------------
     def _easy_behavior(self):
-        """
-        Fácil: Random Choice + Random Walk realmente aleatorio.
-        - Elige un pedido al azar (sólo descarta los imposibles sin casilla adyacente).
-        - Se mueve aleatoriamente (>=70% de las veces) y sólo con leve sesgo (<=30%)
-          hacia el objetivo cuando existe.
-        - Acepta si está a <= 1 del pickup real e intenta pickup explícito tras aceptar.
-        - Si tiene pedido y está adyacente a pickup/dropoff, intenta interacción explícita.
-        """
         from State.OrderState import OrderState
 
-        # 1) Si no tiene pedido
         if not self.agent.inventory_ids:
             available = self._order_mgr.get_available_orders_by_priority()
             valid_orders = []
@@ -514,10 +462,7 @@ class AIManager:
                 if self._nearest_adjacent_walkable(o.dropoff) is None:
                     continue
                 valid_orders.append(o)
-
-            # Con prob alta, simplemente caminar aleatorio aunque haya pedidos
             if not valid_orders or random.random() < 0.5:
-                # 70% paso completamente aleatorio, 30% leve sesgo hacia un pickup si existe
                 if valid_orders and random.random() < 0.3:
                     candidate = random.choice(valid_orders)
                     target = self._nearest_adjacent_walkable(candidate.pickup) or tuple(
@@ -527,63 +472,39 @@ class AIManager:
                 else:
                     self._random_step()
                 return
-
-            # Elegir pedido al azar y actuar mínimamente hacia él
             order = random.choice(valid_orders)
-
-            # Aceptar si ya está adyacente y luego intentar pickup explícito
             if self._is_adjacent_or_same(self.agent.position, tuple(order.pickup)):
                 self._execute_action("accept_order", order)
                 self._cpu_try_interaction()
                 return
-
-            # 70% random puro, 30% leve drift hacia pickup
             target = self._nearest_adjacent_walkable(order.pickup) or tuple(
                 order.pickup
             )
             self._random_neighbor_step_towards(target, toward_prob=0.3)
             return
-
-        # 2) Si ya tiene pedido
         else:
             oid = self.agent.inventory_ids[0]
             order = self._order_mgr.all_orders.get(oid)
             if not order:
-                # sin datos: moverse aleatorio
                 self._random_step()
                 return
-
-            # Intento explícito de interacción si procede (evita quedarnos quietos)
             if self._cpu_try_interaction() is not None:
                 return
-
-            # Movemento aleatorio con leve sesgo hacia objetivo actual
             raw_target = None
             if getattr(order, "state", None).name == "ACCEPTED":
                 raw_target = order.pickup
             elif getattr(order, "state", None).name == "PICKED_UP":
                 raw_target = order.dropoff
-
             if raw_target is None:
                 self._random_step()
                 return
-
             target = self._nearest_adjacent_walkable(raw_target) or tuple(raw_target)
-            # 75% random puro, 25% leve drift hacia el objetivo
             self._random_neighbor_step_towards(target, toward_prob=0.25)
             return
 
     def _medium_behavior(self):
-        """
-        Media: heurística con lookahead corto (2 pasos).
-        - score(order) = payout - (dist_pick + dist_drop) - deadline_pen - climate_pen + priority*10
-        - lookahead: añade 0.5 * (mejor score desde el dropoff)
-        - Movimiento con avoidance + BFS local.
-        - Interacción explícita (pickup/delivery) al estar adyacente para no quedarse quieto.
-        """
         from State.OrderState import OrderState
 
-        # Sin pedido: evaluar con heurística + lookahead
         if not self.agent.inventory_ids:
             avail = self._order_mgr.get_available_orders_by_priority()
             candidates = []
@@ -594,17 +515,13 @@ class AIManager:
                 drop_adj = self._nearest_adjacent_walkable(o.dropoff)
                 if not pick_adj or not drop_adj:
                     continue
-
                 base_score = self._medium_order_value(o, from_pos=self.agent.position)
                 candidates.append((base_score, o, pick_adj, drop_adj))
-
             if not candidates:
                 self._move_towards_center()
                 return
-
             candidates.sort(key=lambda t: t[0], reverse=True)
             top = candidates[:3]
-
             best_total = -1e18
             best_choice = top[0]
             for base_score, o, pick_adj, drop_adj in top:
@@ -613,31 +530,22 @@ class AIManager:
                 if total > best_total:
                     best_total = total
                     best_choice = (base_score, o, pick_adj, drop_adj)
-
             _, best_order, best_pick_adj, _ = best_choice
-
-            # Aceptar si adyacente y luego intentar pickup explícito
             if self._is_adjacent_or_same(self.agent.position, tuple(best_order.pickup)):
                 self._execute_action("accept_order", best_order)
                 self._cpu_try_interaction()
                 return
-
             moved = self._move_towards_target(best_pick_adj)
             if not moved:
                 self._move_towards_center()
             return
-
-        # Con pedido: interacción si adyacente o moverse hacia objetivo adyacente alcanzable
         else:
-            # Intento explícito de interacción primero
             if self._cpu_try_interaction() is not None:
                 return
-
             oid = self.agent.inventory_ids[0]
             order = self._order_mgr.all_orders.get(oid)
             if not order:
                 return
-
             raw_target = (
                 order.pickup
                 if getattr(order, "state", None).name == "ACCEPTED"
@@ -649,13 +557,11 @@ class AIManager:
             )
             if not raw_target:
                 return
-
             target = self._nearest_adjacent_walkable(raw_target)
             if not target:
                 if oid in self.agent.inventory_ids:
                     self.agent.inventory_ids.remove(oid)
                 return
-
             moved = self._move_towards_target(target)
             if not moved:
                 bfs_next = self._local_bfs_next_step(target, max_search=64)
@@ -668,22 +574,15 @@ class AIManager:
                 self._move_towards_center()
 
     def _medium_order_value(self, order, from_pos: Tuple[int, int]) -> float:
-        """
-        Heurística de costo total: pick + drop desde from_pos.
-        Incorpora penalización por clima y por deadline y competencia básica del jugador.
-        """
         pick_adj = self._nearest_adjacent_walkable(order.pickup)
         drop_adj = self._nearest_adjacent_walkable(order.dropoff)
         if not pick_adj or not drop_adj:
             return -1e9
-
         dist_pick = self._manhattan(from_pos, pick_adj)
         dist_drop = self._manhattan(pick_adj, drop_adj)
         base_cost = dist_pick + dist_drop
-
         speed = self._get_weather_speed()
         climate_pen = (1.0 / max(1e-6, speed) - 1.0) * base_cost * 0.5
-
         deadline_pen = 0.0
         try:
             if isinstance(order.deadline, datetime):
@@ -694,7 +593,6 @@ class AIManager:
                     deadline_pen = 20
         except Exception:
             pass
-
         player_bonus_pen = 0.0
         try:
             if self.game and hasattr(self.game, "player"):
@@ -703,7 +601,6 @@ class AIManager:
                     player_bonus_pen = 15.0
         except Exception:
             pass
-
         score = (
             float(order.payout)
             - (base_cost * 1.2)
@@ -717,9 +614,6 @@ class AIManager:
     def _medium_future_from(
         self, from_pos: Tuple[int, int], exclude_id: Optional[str]
     ) -> float:
-        """
-        Evalúa el mejor pedido futuro desde 'from_pos' (una sola orden) para el lookahead.
-        """
         from State.OrderState import OrderState
 
         best = -1e18
@@ -739,17 +633,8 @@ class AIManager:
         return best if best > -1e17 else 0.0
 
     def _hard_behavior(self):
-        """
-        Difícil: planificación A* con coste total (pick+drop) y replan por clima.
-        - Usa planner.path ponderado (GraphBuilder) para estimar costes reales.
-        - Valor = payout - cost_pick - cost_drop + priority*8
-        - Replan al cambiar significativamente el multiplicador de clima.
-        - Lookahead opcional de 2 pedidos (descuento 0.6).
-        - Interacción explícita al estar adyacente para no quedarse quieto.
-        """
         from State.OrderState import OrderState
 
-        # Replan si cambió el clima significativamente
         cur_speed = self._get_weather_speed()
         if self._last_weather_speed is not None:
             if abs(cur_speed - self._last_weather_speed) >= 0.15:
@@ -757,8 +642,6 @@ class AIManager:
                     self.agent.route = []
                 self._hard_next_planned = None
         self._last_weather_speed = cur_speed
-
-        # Sin pedido: evaluar por coste total
         if not self.agent.inventory_ids:
             avail = self._order_mgr.get_available_orders_by_priority()
             valid = []
@@ -773,19 +656,14 @@ class AIManager:
                     o, from_pos=self.agent.position
                 )
                 valid.append((value, o, pick_adj, drop_adj, cost_pick, cost_drop))
-
             if not valid:
                 self._move_towards_center()
                 return
-
             valid.sort(key=lambda t: t[0], reverse=True)
             top = valid[:4]
-
-            # Lookahead opcional: un segundo pedido tras dejar el primero
             best_total = -1e18
             best_choice = top[0]
             next_planned = None
-
             for i in range(len(top)):
                 v1, o1, p1, d1, _, _ = top[i]
                 total_val = v1
@@ -803,29 +681,21 @@ class AIManager:
                     best_total = total_val
                     best_choice = top[i]
                     next_planned = next_choice
-
             best_value, best_order, best_pick_adj, best_drop_adj, _, _ = best_choice
             self._hard_next_planned = next_planned
-
-            # Aceptar si adyacente y luego intentar pickup explícito
             if self._is_adjacent_or_same(self.agent.position, tuple(best_order.pickup)):
                 self._execute_action("accept_order", best_order)
                 self._cpu_try_interaction()
                 return
-
             self._follow_path_to_target(best_pick_adj)
             return
-
-        # Con pedido: interacción explícita si adyacente; sino, seguir ruta
         else:
             if self._cpu_try_interaction() is not None:
                 return
-
             oid = self.agent.inventory_ids[0]
             order = self._order_mgr.all_orders.get(oid)
             if not order:
                 return
-
             raw_target = (
                 order.pickup
                 if getattr(order, "state", None).name == "ACCEPTED"
@@ -837,7 +707,6 @@ class AIManager:
             )
             if not raw_target:
                 return
-
             adj_target = self._nearest_adjacent_walkable(raw_target)
             if not adj_target:
                 if oid in self.agent.inventory_ids:
@@ -845,22 +714,16 @@ class AIManager:
                 if hasattr(self.agent, "route"):
                     self.agent.route = []
                 return
-
             self._follow_path_to_target(adj_target)
             return
 
     def _hard_order_value(
         self, order, from_pos: Tuple[int, int]
     ) -> Tuple[float, float, float]:
-        """
-        Calcula valor = payout - cost_pick - cost_drop + priority*8 usando planner.path.
-        Devuelve (valor, cost_pick, cost_drop).
-        """
         pick_adj = self._nearest_adjacent_walkable(order.pickup)
         drop_adj = self._nearest_adjacent_walkable(order.dropoff)
         if not pick_adj or not drop_adj:
             return (-1e9, float("inf"), float("inf"))
-
         cost_pick = self._path_cost(from_pos, pick_adj)
         cost_drop = self._path_cost(pick_adj, drop_adj)
         total_cost = cost_pick + cost_drop
@@ -868,10 +731,6 @@ class AIManager:
         return (value, cost_pick, cost_drop)
 
     def _path_cost(self, a: Tuple[int, int], b: Tuple[int, int]) -> float:
-        """
-        Suma de pesos de la ruta a->b usando planner.path y planner.weight.
-        Si no hay planner o path, fallback a Manhattan.
-        """
         if not self.planner or not hasattr(self.planner, "path"):
             return float(self._manhattan(a, b))
         try:
@@ -893,18 +752,10 @@ class AIManager:
         except Exception:
             return float(self._manhattan(a, b))
 
-    # -----------------------
-    # Path following (Hard)
-    # -----------------------
     def _follow_path_to_target(self, target: Tuple[int, int]):
-        """
-        Planifica usando planner.path y sigue paso a paso. Re‑plans si detecta bloqueo.
-        target debe ser una casilla caminable (o adyacente al objetivo real).
-        """
         if not self.planner or not hasattr(self.planner, "path"):
             self._move_towards_target(target)
             return
-
         if not getattr(self.agent, "route", None):
             try:
                 path = self.planner.path(self.agent.position, target)
@@ -922,7 +773,6 @@ class AIManager:
                 print(f"[Hard AI] Error planificando ruta: {e}")
                 self._move_towards_target(target)
                 return
-
         if self.agent.route:
             next_pos = self.agent.route[0]
             dx = next_pos[0] - self.agent.position[0]
@@ -946,7 +796,6 @@ class AIManager:
     # Reset / inicialización
     # -----------------------
     def reset(self):
-        """Reinicia el agente IA (se llama al iniciar/resetear partida)."""
         self.agent = self._create_agent(self.difficulty)
         self.last_tick = time.time()
         self.last_decision_time = 0.0
@@ -958,8 +807,6 @@ class AIManager:
                 self._recent_positions.append(tuple(self.agent.position))
             except Exception:
                 pass
-
-        # ajustar tiempos por dificultad (por si cambió)
         if self.difficulty == "easy":
             self.decision_interval = 1.2
             self.min_action_interval = 0.5
@@ -972,7 +819,8 @@ class AIManager:
         else:
             self.decision_interval = 1.2
             self.min_action_interval = 0.5
-
-        # inicializa memoria de clima (Hard)
         self._last_weather_speed = self._get_weather_speed()
         self._hard_next_planned = None
+        # Reset stats
+        for k in self.stats:
+            self.stats[k] = 0
