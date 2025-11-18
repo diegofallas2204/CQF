@@ -834,11 +834,13 @@ class Game:
                     recovery_rate=recovery_rate, delta_time=delta_time
                 )
             
-            # AI stamina recovery (always recovering like player)
+            # AI stamina recovery (only when not moving, same as player)
             if hasattr(self, "ai_manager") and self.ai_manager and self.ai_manager.agent:
-                self.ai_manager.agent.recover_stamina(
-                    recovery_rate=2.0, delta_time=delta_time
-                )
+                ai_time_since_movement = current_time - self.ai_manager.last_movement_time
+                if ai_time_since_movement > self.movement_cooldown:
+                    self.ai_manager.agent.recover_stamina(
+                        recovery_rate=2.0, delta_time=delta_time
+                    )
 
             # Verificar condiciones de juego
             self.check_game_conditions()

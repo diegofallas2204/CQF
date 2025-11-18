@@ -35,6 +35,7 @@ class AIManager:
 
         self.action_cooldown = 0.0
         self.last_decision_time = 0.0
+        self.last_movement_time = 0.0  # Track when AI last moved for stamina recovery
 
         # Referencias al juego (setear con register_game_refs / attach_game)
         self._city = None
@@ -461,6 +462,8 @@ class AIManager:
                 if hasattr(self.game, "_attempt_cpu_move"):
                     self.game._attempt_cpu_move(dx, dy)
                 self.action_cooldown = self.min_action_interval
+                # Track movement time for stamina recovery
+                self.last_movement_time = time.time()
                 try:
                     if self.agent and hasattr(self.agent, "position"):
                         self._recent_positions.append(tuple(self.agent.position))
@@ -948,6 +951,7 @@ class AIManager:
         self.last_tick = time.time()
         self.last_decision_time = 0.0
         self.action_cooldown = 0.0
+        self.last_movement_time = 0.0  # Initialize movement tracking for stamina recovery
         self._recent_positions = deque(maxlen=10)
         if self.agent and hasattr(self.agent, "position"):
             try:
